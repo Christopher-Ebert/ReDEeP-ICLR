@@ -16,6 +16,8 @@ class ReDeEP_Configs:
         topk_heads_path: str
         start_layer: int
         num_layers: int
+        ragtruth: dict
+        dolly: dict
 
     # Model configurations mapping
     MODEL_CONFIGS = {
@@ -23,20 +25,25 @@ class ReDeEP_Configs:
             name=ModelName.LLAMA2_7B.value,
             topk_heads_path="./log/test_llama2_7B/topk_heads.json",
             start_layer=0,
-            num_layers=32
+            num_layers=32,
+            ragtruth={"top_n":1, "top_k":10, "alpha":0.2, "m":1},
+            dolly={"top_n":4, "top_k":3, "alpha":0.2, "m":1}
         ),
         ModelName.LLAMA2_13B: ModelConfig(
             name=ModelName.LLAMA2_13B.value,
             topk_heads_path="./log/test_llama2_13B/topk_heads.json",
-
             start_layer=8,
-            num_layers=40
+            num_layers=40,
+            ragtruth={"top_n": 2, "top_k": 17, "alpha": 0.6, "m": 1},
+            dolly={"top_n": 4, "top_k": 5, "alpha": 0.6, "m": 1}
         ),
         ModelName.LLAMA3_8B: ModelConfig(
             name=ModelName.LLAMA3_8B.value,
             topk_heads_path="./log/test_llama3_8B/topk_heads.json",
             start_layer=0,
-            num_layers=16
+            num_layers=16,
+            ragtruth={"top_n": 3, "top_k": 30, "alpha": 0.4, "m": 1},
+            dolly={"top_n": 1, "top_k": 1, "alpha": 0.1, "m": 1}
         ),
     }
 

@@ -13,17 +13,18 @@ def load_data(fp):
         data = json.load(f)
     return data
 
-def load_copy_heads(copy_heads_list=None, copy_heads_path=None):
-    if copy_heads_list:
-        return copy_heads_list
-    return load_data(copy_heads_path)
+
+def load_copy_heads(fp) -> tuple[list, str]:
+    data = load_data(fp)
+    return data['copy_heads'], data["model"]
+
 
 def load_model_and_tokenizer(model_name, cache_dir, hf_token) -> Tuple:
     """Load the model, tokenizer, and optional tokenizer for template."""
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         device_map="auto",
-        dtype=torch.float16,
+        dtype=torch.bfloat16,
         cache_dir=cache_dir,
         attn_implementation="eager",
         token=hf_token
@@ -138,11 +139,10 @@ def process_responses(
 
         with torch.no_grad():
             outputs = model(
-                input_ids=input_ids,
-                return_dict=True,
+                input_ids=input_ids.to(model.device),
                 output_attentions=True,
                 output_hidden_states=True,
-                # knowledge_layers=list(range(start, number)) start and number defined in redeep config above
+                # knowledge_layers=list(range(start, number)) start and number defined in original_redeep_config.py
             )
         # not sure what this does. but maybe same as itertools.pairwise on the logits.
         # logits_dict = {key: [value[0].to(device), value[1].to(device)] for key, value in logits_dict.items()}
@@ -224,8 +224,9 @@ def process_responses(
             #     hallucination_label.append(0)
             hallucination_label.append(is_hallucination_token(seq_i, hallucination_spans))
 
-            external_similarity.append(cosine_similarity.cpu().tolist())
-            parameter_knowledge_difference.append([calculate_dist(value[0], value[1]) for value in list(logits_pairwise)])
+            external_similarity.append(cosine_similarity)
+            parameter_knowledge_difference.append(
+                [calculate_dist(value[0], value[1]) for value in list(logits_pairwise)])
 
         dc[dataset_key] = {
             "key": dataset_key,
@@ -234,6 +235,9 @@ def process_responses(
             "hallucination_label": hallucination_label,
             **dataset_value
         }
+        torch.cuda.empty_cache()
+        gc.collect()
+
     dc["copy_heads"] = copy_heads
     return dc
 
@@ -243,20 +247,27 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='ReDeEP token level detection.')
     parser.add_argument("-m", '--model_name', type=str, required=True, help='huggingface model identifyer')
     parser.add_argument("-d", "--dataset_path", type=str, required=True, help=f"path to dataset")
-    parser.add_argument("-h", "--copy_heads", type=list, required=False, default=None, help="topk heads to use direct command line argument. excludes usage of topk_heads_path")
-    parser.add_argument("--copy_heads_path", type=str, required=False, default=None, help="topk heads to use as json_file.")  # TODO: impl all flag
-    parser.add_argument("-o", "--output", type=str, default="./redeep_token_level_detection.json", help="output path. Default: ./redeep_token_level_detection.json")  # TODO: do me.
-    parser.add_argument("--cache_dir", type=str, default="./cache_dir", help="cache directory for saving superficial data")
-    parser.add_argument("-t", "--hf_token", type=str, help="huggingface token. can also be set using environmental.")
+    parser.add_argument("-c", "--copy_heads_path", type=str, required=False, default=None,
+                        help="topk heads to use as json_file.")  # TODO: impl 'all' flag
+    parser.add_argument("-o", "--output", type=str, default="./redeep_token_level_detection.json",
+                        help="output path. Default: ./redeep_token_level_detection.json")
+    parser.add_argument("--cache_dir", type=str, default="./cache_dir",
+                        help="cache directory for saving superficial data")
+    parser.add_argument("-t", "--token", type=str, help="huggingface token. can also be set using environmental.")
     return parser.parse_args()
 
 
 def main(args: argparse.Namespace):
     """Main function to orchestrate the processing pipeline."""
     # setup
+    copy_heads, copy_heads_model = load_copy_heads(args.copy_heads_path)
+    if args.model_name != copy_heads_model:
+        warnings.warn(
+            f"provided copy_heads file was created with different model as currently provided. Please check that this is expected. model_name={args.model_name} copy_heads_model={copy_heads_model}")
+
     dataset = load_data(args.dataset_path)
-    model, tokenizer = load_model_and_tokenizer(args.model_name, args.cache_dir, args.hf_token)
-    copy_heads = load_copy_heads(args.copy_heads, args.copy_heads_path)
+    model, tokenizer = load_model_and_tokenizer(args.model_name, args.cache_dir, args.token)
+
     # redeep
     processed_responses: Dict[str, Dict[str, Any]] = process_responses(dataset, model, tokenizer, copy_heads)
     # saving
