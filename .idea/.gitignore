@@ -10,3 +10,6 @@
 /pyProjectModel.xml
 /ReDEeP-ICLR.iml
 /vcs.xml
+/misc.xml
+*.xml
+*.iml
