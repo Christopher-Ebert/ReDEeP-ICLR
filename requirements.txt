@@ -1,0 +1,7 @@
+transformers
+datasets
+accelerate
+numpy
+tqdm
+sentence-transformers
+# torch
