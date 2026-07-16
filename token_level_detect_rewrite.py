@@ -1,3 +1,4 @@
+import warnings
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, Iterable, Dict, List, Tuple
@@ -7,10 +8,29 @@ import json
 from torch.nn import functional as F
 import argparse
 from tqdm import tqdm
+import gc
 
-def load_data(fp):
+
+class JsonEncoder(json.JSONEncoder):
+    """
+    json encoder allowing for serialization of pydantic and exception objects.
+    """
+
+    def default(self, o):
+        if isinstance(o, torch.Tensor):
+            return o.tolist()
+        return super().default(o)
+
+
+def load_data(fp, amount: int = -1, ):
     with Path(fp).open() as f:
-        data = json.load(f)
+        data: dict = json.load(f)
+
+    # handling amount
+    if amount == -1:
+        return data
+    avail_keys = list(data.keys())[:amount]
+    data = {k: data[k] for k in avail_keys}
     return data
 
 
@@ -124,10 +144,6 @@ def process_responses(
         text = add_special_template(prompt[:12000], tokenizer)
         input_text = text + response_rag
 
-        print("all_text_len:", len(input_text))
-        print("prompt_len", len(prompt))
-        print("respond_len", len(response_rag))
-
         input_ids = tokenizer([input_text], return_tensors="pt").input_ids
         prefix_ids = tokenizer([text], return_tensors="pt").input_ids
         continue_ids = input_ids[0, prefix_ids.shape[
@@ -148,10 +164,10 @@ def process_responses(
         # logits_dict = {key: [value[0].to(device), value[1].to(device)] for key, value in logits_dict.items()}
         # replacing with itertools.pairwise
         logits_pairwise = pairwise(outputs.logits[0])
-
         # skip tokens without hallucination
         # outputs.hidden_states = tuple ([batch, seq_len, vocab_size], ..., )
         last_hidden_states = outputs.hidden_states[-1][0, :, :]  # [prefix_len, hidden_size]
+        outputs.hidden_states = None  # memory optimization
 
         # todo 修改成 筛选 teacher focusing 的 token 和 model generate token 是否在 top_10内 -> Modify this to filter for tokens where the teacher's focus and the model's generated token both fall within the top 10.
         # probs = outputs['logits'][range(outputs["logits"].shape[0]), continue_ids].sum().item()
@@ -166,14 +182,13 @@ def process_responses(
         # TODO: make sure attn_layer_id, head_id exist in model prior to iterating
         attentions_list: List[torch.Tensor] = [outputs.attentions[attn_layer_id][:, head_id, :, :] for
                                                attn_layer_id, head_id in copy_heads]
-
         # Step 1: Average the attention across the number of heads
         for seq_i in range(prefix_ids.shape[-1] - 1, input_ids.shape[-1] - 1):
+            torch.cuda.empty_cache()
             # Step 2: Extract the non-zero values from the last row/column
             # Now we gather the attention scores for the last token of each sequence
             pointer_scores_list: list[torch.Tensor] = [attention[:, seq_i, :] for attention in
                                                        attentions_list]  # shape: (batch_size, sequence_length)
-
             # Step 3: Perform a softmax over the modified attention scores
             # pointer_probs = nn.F.softmax(pointer_scores, dim=-1)  # shape: (batch_size, sequence_length)
             pointer_probs_list = torch.cat(
@@ -213,7 +228,6 @@ def process_responses(
 
             # 扩展 current_hidden_state 的形状以匹配 pointer_probs_list -> Expand the shape of current_hidden_state to match pointer_probs_list.
             current_hidden_state = current_hidden_state.unsqueeze(0).expand(attend_token_hidden_state.shape)
-
             # 计算余弦相似度 -> Calculate cosine similarity.
             cosine_similarity = F.cosine_similarity(attend_token_hidden_state.to(model.device),
                                                     current_hidden_state.to(model.device), dim=1)
@@ -223,7 +237,6 @@ def process_responses(
             # else:
             #     hallucination_label.append(0)
             hallucination_label.append(is_hallucination_token(seq_i, hallucination_spans))
-
             external_similarity.append(cosine_similarity)
             parameter_knowledge_difference.append(
                 [calculate_dist(value[0], value[1]) for value in list(logits_pairwise)])
@@ -238,7 +251,7 @@ def process_responses(
         torch.cuda.empty_cache()
         gc.collect()
 
-    dc["copy_heads"] = copy_heads
+    dc["info"] = {"copy_heads": copy_heads}
     return dc
 
 
@@ -254,6 +267,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--cache_dir", type=str, default="./cache_dir",
                         help="cache directory for saving superficial data")
     parser.add_argument("-t", "--token", type=str, help="huggingface token. can also be set using environmental.")
+    parser.add_argument("-a", "--amount", type=int, default=-1, help="amount of datapoints to analyze")
     return parser.parse_args()
 
 
@@ -265,7 +279,7 @@ def main(args: argparse.Namespace):
         warnings.warn(
             f"provided copy_heads file was created with different model as currently provided. Please check that this is expected. model_name={args.model_name} copy_heads_model={copy_heads_model}")
 
-    dataset = load_data(args.dataset_path)
+    dataset = load_data(args.dataset_path, args.amount)
     model, tokenizer = load_model_and_tokenizer(args.model_name, args.cache_dir, args.token)
 
     # redeep
@@ -273,20 +287,22 @@ def main(args: argparse.Namespace):
     # saving
     save_path = Path(args.output)
     with save_path.open("w") as f:
-        json.dump(processed_responses, f, ensure_ascii=False, indent=1)
+        json.dump(processed_responses, f, ensure_ascii=False, cls=JsonEncoder, indent=1, )
     print(f"Results saved to {save_path}")
 
 
-if __name__ == "__main__":
-    #args = parse_arguments()
+def test_args():
     args = argparse.Namespace()
     args.model_name = "meta-llama/Llama-2-7b-chat-hf"
-    args.cache_dir = "./cache_dir"
-    args.hf_token = ""
-    args.dataset_path = r"/mnt/internal/sata-ssd/GitHub/SteffenLuminaETC/ReDeEP/dataset/response_span_llama-2-7b-chat.json"
-    args.copy_heads = [[25, 0], [18, 13], [18, 10], [27, 9], [5, 29], [23, 8], [31, 28], [3, 0], [31, 24], [13, 20],
-                  [31, 18], [1, 14], [2, 5], [22, 10], [2, 22], [15, 7], [3, 19], [20, 17], [10, 20], [23, 30],
-                  [20, 22], [1, 27], [20, 1], [31, 19], [28, 18], [20, 15], [1, 21], [19, 1], [20, 5], [16, 1], [18, 9],
-                  [5, 13]]
-    args.copy_heads_path = None
+    args.dataset_path = "./dataset/response_span_llama-2-7b-chat.json"
+    args.copy_heads_path = "./copy_heads/llama27b_copy_heads.json"
+    args.token = ""
+    args.output = "./test_output.json"
+    args.cache_dir = "./.cache_dir"
+    return args
+
+
+if __name__ == "__main__":
+    args = parse_arguments()
+    # args = test_args()
     main(args)
