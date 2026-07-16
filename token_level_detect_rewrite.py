@@ -9,7 +9,10 @@ from torch.nn import functional as F
 import argparse
 from tqdm import tqdm
 import gc
+from patch import patch
 
+# monkey patching redeep llama
+patch()
 
 class JsonEncoder(json.JSONEncoder):
     """
@@ -154,14 +157,14 @@ def process_responses(
             hallucination_spans = calculate_hallucination_spans(labels, text, response_rag, tokenizer)
 
         with torch.no_grad():
-            outputs = model(
+            logits_dict, outputs = model(
                 input_ids=input_ids.to(model.device),
                 output_attentions=True,
                 output_hidden_states=True,
-                # knowledge_layers=list(range(start, number)) start and number defined in original_redeep_config.py
+                knowledge_layers=list(range(0, 32)) # start and number defined in original_redeep_config.py
             )
-        # not sure what this does. but maybe same as itertools.pairwise on the logits.
-        # logits_dict = {key: [value[0].to(device), value[1].to(device)] for key, value in logits_dict.items()}
+
+        logits_dict = {key: [value[0].to(model.device), value[1].to(model.device)] for key, value in logits_dict.items()}
         # replacing with itertools.pairwise
         logits_pairwise = pairwise(outputs.logits[0])
         # skip tokens without hallucination
@@ -239,7 +242,7 @@ def process_responses(
             hallucination_label.append(is_hallucination_token(seq_i, hallucination_spans))
             external_similarity.append(cosine_similarity)
             parameter_knowledge_difference.append(
-                [calculate_dist(value[0], value[1]) for value in list(logits_pairwise)])
+                [calculate_dist(value[0][0,seq_i,:], value[1][0,seq_i,:]) for value in logits_dict.values()])
 
         dc[dataset_key] = {
             "key": dataset_key,
@@ -299,6 +302,7 @@ def test_args():
     args.token = ""
     args.output = "./test_output.json"
     args.cache_dir = "./.cache_dir"
+    args.amount = 5
     return args
 
 
