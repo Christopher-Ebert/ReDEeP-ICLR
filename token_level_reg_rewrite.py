@@ -11,50 +11,27 @@ import pdb
 from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score
 from tqdm import tqdm
 import argparse
-
-parser = argparse.ArgumentParser(description='Script for processing data and models.')
-parser.add_argument('--model_name', type=str, required=True, help='llama2-7b or llama2-13b')
-parser.add_argument(
-    '--dataset',
-    type=str,
-    default="ragtruth",
-    help='ragtruth, dolly'
-)
-
-args = parser.parse_args()
+from pathlib import Path
+from typing import Any
 
 
-def construct_dataframe(file_path, number):
+def load_data(fp):
+    with Path(fp).open() as f:
+        data = json.load(f)
+    return data
+
+
+def construct_dataframe(fp) -> tuple[pd.DataFrame, dict]:
     # Sample data for illustration
-    with open(file_path, "r") as f:
-        response = json.load(f)
-
-        # Create a dataframe to hold the combined information
-
-    data_dict = {
-        "identifier": [],
-        **{f"external_similarity_{k}": [] for k in range(number)},
-        **{f"parameter_knowledge_difference_{k}": [] for k in range(number)},
-        "hallucination_label": []
-    }
-
-    for i, resp in enumerate(response):
-        if resp["split"] != "test":
-            continue
-        for j in range(len(resp["external_similarity"])):
-            data_dict["identifier"].append(f"response_{i}_item_{j}")
-            for k in range(number):
-                data_dict[f"external_similarity_{k}"].append(resp["external_similarity"][j][k])
-                data_dict[f"parameter_knowledge_difference_{k}"].append(resp["parameter_knowledge_difference"][j][k])
-            data_dict["hallucination_label"].append(resp["hallucination_label"][j])
-
-    df = pd.DataFrame(data_dict)
-
-    print(df["hallucination_label"].value_counts(normalize=True))
-    return df
+    with Path(fp).open() as f:
+        response: dict = json.load(f)
+    info = response.pop('info')
+    df = pd.DataFrame(response)
+    # print("hallucination_label value_counts:", df["hallucination_label"].value_counts(normalize=True))
+    return df, info
 
 
-def linear_regression(df):
+def linear_regression(df: pd.DataFrame):
     # Extract features and labels
     features = df.drop(columns=["identifier", "hallucination_label"])
     labels = df["hallucination_label"]
@@ -74,51 +51,60 @@ def linear_regression(df):
     report = classification_report(y_test, y_pred)
     print(accuracy)
     print(report)
+    return accuracy, report  # TODO: maybe add f1, recall, precision
 
 
-def calculate_auc_pcc(df, number):
+def calculate_auc_pcc(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
     # Calculate AUC and Pearson correlation for each of the 64 values
-    auc_external_similarity = []
-    pearson_external_similarity = []
-
-    auc_parameter_knowledge_difference = []
-    pearson_parameter_knowledge_difference = []
-
-    for k in range(number):
+    dc: dict[str, dict[str, Any]] = {}
+    for k, v in df.items():
         # External similarity metrics
-        auc_ext = roc_auc_score(1 - df['hallucination_label'], df[f'external_similarity_{k}'])
-        pearson_ext, _ = pearsonr(df[f'external_similarity_{k}'], 1 - df['hallucination_label'])
-        auc_external_similarity.append((auc_ext, f'external_similarity_{k}'))
-        pearson_external_similarity.append((pearson_ext, f'external_similarity_{k}'))
+        hallu_label = np.array(v['hallucination_label'])
+        ext_sim = np.array(v['external_similarity']).T  # TODO: check transposing here is correct.
+        param_know_diff = np.array(v['parameter_knowledge_difference']).T
 
+        auc_ext_list = [roc_auc_score(1 - hallu_label, ext_sim[i]) for i in
+                        range(ext_sim.shape[0] - 1)]  # not sure why y_true has to be the boolean-inverse.
+        pearson_ext_list = [pearsonr(ext_sim[i], 1 - hallu_label).correlation for i in
+                            range(ext_sim.shape[0] - 1)]  # TODO: check correlation is the correct value.
+
+        auc_param = [roc_auc_score(hallu_label, param_know_diff[i]) for i in range(param_know_diff.shape[0] - 1)]
+        pearson_param = [pearsonr(param_know_diff[i], hallu_label).correlation for i in range(param_know_diff.shape[0] - 1)]
+        dc[k] = {"auc_external_similarity": auc_ext_list,
+                 "pearson_external_similarity": pearson_ext_list,
+                 "auc_parameter_knowledge_difference": auc_param,
+                 "pearson_parameter_knowledge_difference": pearson_param
+                 }
         # Parameter knowledge difference metrics
-        auc_param = roc_auc_score(df['hallucination_label'], df[f'parameter_knowledge_difference_{k}'])
-        if df[f'parameter_knowledge_difference_{k}'].nunique() == 1:
-            print(k)
-        pearson_param, _ = pearsonr(df[f'parameter_knowledge_difference_{k}'], df['hallucination_label'])
-        auc_parameter_knowledge_difference.append((auc_param, f'parameter_knowledge_difference_{k}'))
-        pearson_parameter_knowledge_difference.append((pearson_param, f'parameter_knowledge_difference_{k}'))
-    return auc_external_similarity, auc_parameter_knowledge_difference
+        # not sure what this debug-flag helps with. Keeping here for information purpose. This implementation does no longer work with current df-layout.
+        # if v[f'parameter_knowledge_difference'].nunique() == 1:
+        #     print(k)
+    return dc
 
 
-def calculate_auc_pcc_32_32(df, top_n, top_k, alpha, auc_external_similarity, auc_parameter_knowledge_difference, m=1):
+# copy_heads <-> [attn_layer, head]
+def calculate_auc_pcc_32_32(df: pd.DataFrame, copy_heads: list[tuple[int, int]], top_n: int, top_k: int, alpha: float,
+                            auc_pcc_dict: dict[str, dict[str, Any]], m: int = 1):
     collect_info = {}
     # Sort by AUC and select the top N features (for example, top 5)
-    top_auc_external_similarity = sorted(auc_external_similarity, reverse=True)[:top_n]
-    collect_info.update(
-        {"select_heads": [sorted_copy_heads[eval(name.split('_')[-1])] for _, name in top_auc_external_similarity]})
+    top_n_auc_external_similarity = sorted(auc_pcc_dict["auc_external_similarity"], reverse=True)[:top_n]
+    top_k_auc_parameter_knowledge_difference = sorted(auc_pcc_dict["auc_parameter_knowledge_difference"], reverse=True)[
+        :top_k]
 
-    top_auc_parameter_knowledge_difference = sorted(auc_parameter_knowledge_difference, reverse=True)[:top_k]
+    sorted_copy_heads = sorted(copy_heads, key=lambda x: (x[0], x[1]))
+    collect_info.update(
+        {"select_heads": [sorted_copy_heads[eval(name.split('_')[-1])] for _, name in top_n_auc_external_similarity]})
+
     if args.model_name == "llama2-13b":
         base_layer = 7
     else:
         base_layer = 0
     collect_info.update({"select_layers": [eval(name.split('_')[-1]) + base_layer for _, name in
-                                           top_auc_parameter_knowledge_difference]})
+                                           top_k_auc_parameter_knowledge_difference]})
 
     # Sum the top N features for each type
-    df['external_similarity_sum'] = df[[col for _, col in top_auc_external_similarity]].sum(axis=1)
-    df['parameter_knowledge_difference_sum'] = df[[col for _, col in top_auc_parameter_knowledge_difference]].sum(
+    df['external_similarity_sum'] = df[[col for _, col in top_n_auc_external_similarity]].sum(axis=1)
+    df['parameter_knowledge_difference_sum'] = df[[col for _, col in top_k_auc_parameter_knowledge_difference]].sum(
         axis=1)
 
     # Calculate AUC for the summed top N features
@@ -177,7 +163,7 @@ def calculate_auc_pcc_32_32(df, top_n, top_k, alpha, auc_external_similarity, au
     collect_info.update({'final_max_min': [max_val, min_val]})
     # 进行归一化
     grouped_df['difference_normalized_mean_norm'] = (grouped_df['difference_normalized_mean'] - min_val) / (
-                max_val - min_val)
+            max_val - min_val)
 
     # Calculate AUC for the grouped means
     auc_difference_normalized = roc_auc_score(grouped_df['hallucination_label'],
@@ -195,99 +181,48 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='ReDeEP token level detection.')
     parser.add_argument("-m", '--model_name', type=str, required=True, help='huggingface model identifyer')
     parser.add_argument("-d", "--dataset_path", type=str, required=True, help=f"path to dataset")
-    parser.add_argument("-h", "--copy_heads", type=list, required=False, default=None, help="topk heads to use direct command line argument. excludes usage of topk_heads_path")
-    parser.add_argument("--copy_heads_path", type=str, required=False, default=None, help="topk heads to use as json_file.")  # TODO: impl all flag
-    parser.add_argument("-o", "--output", type=str, default="./redeep_token_level_detection.json", help="output path. Default: ./redeep_token_level_detection.json")  # TODO: do me.
-    parser.add_argument("--cache_dir", type=str, default="./cache_dir", help="cache directory for saving superficial data")
-    parser.add_argument("-t", "--hf_token", type=str, help="huggingface token. can also be set using environmental.")
+    parser.add_argument("-o", "--output", type=str, default="./redeep_token_level_regression.json",
+                        help="output path. Default: ./redeep_token_level_detection.json")  # TODO: do me.
+    parser.add_argument("--cache_dir", type=str, default="./cache_dir",
+                        help="cache directory for saving superficial data")
+    parser.add_argument("--top_n", type=int, default=1, help="")
+    parser.add_argument("--top_k", type=int, default=10)
+    parser.add_argument("--alpha", type=float, default=0.2)
+    parser.add_argument("--m", type=int, default=1)
     return parser.parse_args()
 
+
 def main(args: argparse.Namespace):
-    if args.model_name == "llama2-7b":
-        topk_head_path = "./log/test_llama2_7B/topk_heads.json"
-    elif args.model_name == "llama2-13b":
-        topk_head_path = "./log/test_llama2_13B/topk_heads.json"
-    elif args.model_name == "llama3-8b":
-        topk_head_path = "./log/test_llama3_8B/topk_heads.json"
-    else:
-        print("model name error")
-        exit(-1)
+    # number = 32  # amount of samples. relates to layers of detect_model. No longer used, automatic methods used. Keeping for explanation.
+    df, info = construct_dataframe(args.dataset_path)  # output of token_level_detect
+    auc_pcc_dict: dict[str, dict[str, Any]] = calculate_auc_pcc(df)
 
-    with open(topk_head_path, 'r') as f:
-        # [(layer, head)...]
-        copy_heads = json.load(f)
-    sorted_copy_heads = sorted(copy_heads, key=lambda x: (x[0], x[1]))
+    auc_difference_normalized, person_difference_normalized = calculate_auc_pcc_32_32(df, info['copy_heads'],
+                                                                                      args.top_n, args.top_k,
+                                                                                      args.alpha,
+                                                                                      auc_pcc_dict,
+                                                                                      args.m)
 
-    if args.model_name == "llama2-7b":
-        if args.dataset == "ragtruth":
-            data_path = "./log/test_llama2_7B/llama2_7B_response_v1.json"
-        elif args.dataset == "dolly":
-            data_path = "./log/test_llama2_7B/llama2_7B_response_v1_dolly.json"
-        number = 32
-    elif args.model_name == "llama2-13b":
-        if args.dataset == "ragtruth":
-            data_path = "./log/test_llama2_13B/llama2_13B_response_v1.json"
-        elif args.dataset == "dolly":
-            data_path = "./log/test_llama2_13B/llama2_13B_response_v1_dolly.json"
-        number = 32
-    elif args.model_name == "llama3-8b":
-        if args.dataset == "ragtruth":
-            data_path = "./log/test_llama3_8B/llama3_8B_response_v1.json"
-        elif args.dataset == "dolly":
-            data_path = "./log/test_llama2_13B/llama3_8B_response_v1_dolly.json"
-        number = 32
-    else:
-        print("model name error")
-        exit(-1)
-    df = construct_dataframe(data_path, number)
-    auc_external_similarity, auc_parameter_knowledge_difference = calculate_auc_pcc(df.iloc[:, :int(df.shape[1] * 0.5)],
-                                                                                    number)
-    run_all = False
-
-    if args.model_name == "llama2-7b":
-        if args.dataset == "ragtruth":
-            i, j, k, m = 1, 10, 0.2, 1
-        elif args.dataset == "dolly":
-            i, j, k, m = 4, 3, 0.2, 1
-
-    elif args.model_name == "llama2-13b":
-        if args.dataset == "ragtruth":
-            i, j, k, m = 2, 17, 0.6, 1
-        elif args.dataset == "dolly":
-            i, j, k, m = 4, 5, 0.6, 1
-
-    elif args.model_name == "llama3-8b":
-        if args.dataset == "ragtruth":
-            i, j, k, m = 3, 30, 0.4, 1
-        elif args.dataset == "dolly":
-            i, j, k, m = 1, 1, 0.1, 1
-    else:
-        print("model name error")
-        exit(-1)
-    auc_difference_normalized, person_difference_normalized = calculate_auc_pcc_32_32(df, i, j, k,
-                                                                                      auc_external_similarity,
-                                                                                      auc_parameter_knowledge_difference,
-                                                                                      m)
-    if args.model_name == "llama2-7b":
-        save_path = "./log/test_llama2_7B/ReDeEP(token).json"
-    elif args.model_name == "llama2-13b":
-        save_path = "./log/test_llama2_13B/ReDeEP(token).json"
-    elif args.model_name == "llama3-8b":
-        save_path = "./log/test_llama3_8B/ReDeEP(token).json"
-    else:
-        print("model name error")
-        exit(-1)
     result_dict = {"auc": auc_difference_normalized, "pcc": person_difference_normalized}
-    print(result_dict)
-    with open(save_path, 'w') as f:
-        json.dump(result_dict, f, ensure_ascii=False)
+    # print(result_dict)
+    # with open(save_path, 'w') as f:
+    #     json.dump(result_dict, f, ensure_ascii=False)
 
 
-
-
-
+def test_args():
+    args = argparse.Namespace()
+    args.model_name = "meta-llama/Llama-2-7b-chat-hf"
+    args.dataset_path = "./test_output.json"
+    args.output = "./test_regression_results.json"
+    args.cache_dir = "./.cache_dir"
+    args.top_n = 1
+    args.top_k = 10
+    args.alpha = 0.2
+    args.m = 1
+    return args
 
 
 if __name__ == "__main__":
-    args=parse_arguments()
+    # args = parse_arguments()
+    args = test_args()
     main(args)
