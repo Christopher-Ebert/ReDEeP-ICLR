@@ -1,18 +1,13 @@
 import warnings
-from itertools import pairwise
 from pathlib import Path
 from typing import Any, Iterable, Dict, List, Tuple
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaForCausalLM
 import json
 from torch.nn import functional as F
 import argparse
 from tqdm import tqdm
 import gc
-from patch import patch
-
-# monkey patching redeep llama
-patch()
 
 class JsonEncoder(json.JSONEncoder):
     """
@@ -22,6 +17,8 @@ class JsonEncoder(json.JSONEncoder):
     def default(self, o):
         if isinstance(o, torch.Tensor):
             return o.tolist()
+        if isinstance(o, bool):
+            return int(o)
         return super().default(o)
 
 
@@ -47,7 +44,7 @@ def load_model_and_tokenizer(model_name, cache_dir, hf_token) -> Tuple:
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         device_map="auto",
-        dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16,
         cache_dir=cache_dir,
         attn_implementation="eager",
         token=hf_token
@@ -137,6 +134,7 @@ def process_responses(
         model: Any,
         tokenizer: Any,
         copy_heads: Iterable[Iterable[int]],
+        knowledge_layers: List[int]
 ) -> dict[str, dict[str, Any]]:
     dc = {}
     for dataset_key, dataset_value in tqdm(dataset.items(), desc="processing ReDeEP token level detection."):
@@ -161,12 +159,11 @@ def process_responses(
                 input_ids=input_ids.to(model.device),
                 output_attentions=True,
                 output_hidden_states=True,
-                knowledge_layers=list(range(0, 32)) # start and number defined in original_redeep_config.py
+                knowledge_layers=list(range(knowledge_layers[0], knowledge_layers[1]))
             )
 
-        logits_dict = {key: [value[0].to(model.device), value[1].to(model.device)] for key, value in logits_dict.items()}
-        # replacing with itertools.pairwise
-        logits_pairwise = pairwise(outputs.logits[0])
+        logits_dict = {key: [value[0].to(model.device), value[1].to(model.device)] for key, value in
+                       logits_dict.items()}
         # skip tokens without hallucination
         # outputs.hidden_states = tuple ([batch, seq_len, vocab_size], ..., )
         last_hidden_states = outputs.hidden_states[-1][0, :, :]  # [prefix_len, hidden_size]
@@ -234,15 +231,10 @@ def process_responses(
             # 计算余弦相似度 -> Calculate cosine similarity.
             cosine_similarity = F.cosine_similarity(attend_token_hidden_state.to(model.device),
                                                     current_hidden_state.to(model.device), dim=1)
-
-            # if is_hallucination_token(seq_i, hallucination_spans):
-            #     hallucination_label.append(1)
-            # else:
-            #     hallucination_label.append(0)
             hallucination_label.append(is_hallucination_token(seq_i, hallucination_spans))
             external_similarity.append(cosine_similarity)
             parameter_knowledge_difference.append(
-                [calculate_dist(value[0][0,seq_i,:], value[1][0,seq_i,:]) for value in logits_dict.values()])
+                [calculate_dist(value[0][0, seq_i, :], value[1][0, seq_i, :]) for value in logits_dict.values()])
 
         dc[dataset_key] = {
             "key": dataset_key,
@@ -271,7 +263,11 @@ def parse_arguments() -> argparse.Namespace:
                         help="cache directory for saving superficial data")
     parser.add_argument("-t", "--token", type=str, help="huggingface token. can also be set using environmental.")
     parser.add_argument("-a", "--amount", type=int, default=-1, help="amount of datapoints to analyze")
-    return parser.parse_args()
+    parser.add_argument("-k", "--knowledge_layers", required=False, nargs=2, default=[0, 32], help="knowledge layers")
+
+    args = parser.parse_args()
+    args.knowledge_layers = [int(i) for i in args.knowledge_layers]
+    return args
 
 
 def main(args: argparse.Namespace):
@@ -286,7 +282,8 @@ def main(args: argparse.Namespace):
     model, tokenizer = load_model_and_tokenizer(args.model_name, args.cache_dir, args.token)
 
     # redeep
-    processed_responses: Dict[str, Dict[str, Any]] = process_responses(dataset, model, tokenizer, copy_heads)
+    processed_responses: Dict[str, Dict[str, Any]] = process_responses(dataset, model, tokenizer, copy_heads,
+                                                                       args.knowledge_layers)
     # saving
     save_path = Path(args.output)
     with save_path.open("w") as f:
@@ -303,6 +300,7 @@ def test_args():
     args.output = "./test_output.json"
     args.cache_dir = "./.cache_dir"
     args.amount = 5
+    args.knowledge_layers = [0, 32]
     return args
 
 
