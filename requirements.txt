@@ -1,7 +1,8 @@
-transformers
+file:./transformers-4.42.0.dev0-py3-none-any.whl  #transformers
 datasets
 accelerate
 numpy
 tqdm
 sentence-transformers
+transformers
 # torch
