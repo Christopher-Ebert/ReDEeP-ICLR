@@ -29,7 +29,8 @@ def construct_dataframe(fp) -> tuple[dict, dict]:
     response = {"statics": data}
     # print("hallucination_label value_counts:", df["hallucination_label"].value_counts(normalize=True))
     external_similarity_concat = np.concatenate([v["external_similarity"] for k, v in data.items()], axis=0).T
-    parameter_knowledge_concat = np.concatenate([v["parameter_knowledge_difference"] for k, v in data.items()], axis=0).T
+    parameter_knowledge_concat = np.concatenate([v["parameter_knowledge_difference"] for k, v in data.items()],
+                                                axis=0).T
     hallucination_label_concat = np.concatenate([v["hallucination_label"] for k, v in data.items()], axis=0)
     response.update({
         "external_similarity_concat": external_similarity_concat,
@@ -64,9 +65,9 @@ def linear_regression(df: pd.DataFrame):
 
 def calculate_auc_pcc(dc: dict):
     inv_labels = 1 - dc["hallucination_label_concat"]
-    auc_ext_sim_list = [roc_auc_score(inv_labels, row) for row in dc["external_similarity_concat"][:-1]]
+    auc_ext_sim_list = np.array([roc_auc_score(inv_labels, row) for row in dc["external_similarity_concat"][:-1]])
     pearson_ext_sim_list = np.corrcoef(dc["external_similarity_concat"][:-1], inv_labels)[:-1, -1]
-    auc_param_know_list = [roc_auc_score(inv_labels, row) for row in dc["parameter_knowledge_concat"][:-1]]
+    auc_param_know_list = np.array([roc_auc_score(inv_labels, row) for row in dc["parameter_knowledge_concat"][:-1]])
     pearson_param_know_list = np.corrcoef(dc["parameter_knowledge_concat"][:-1], inv_labels)[:-1, -1]
     return auc_ext_sim_list, pearson_ext_sim_list, auc_param_know_list, pearson_param_know_list
 
@@ -107,14 +108,16 @@ def calculate_auc_pcc_32_32(dc: dict, copy_heads: list, top_n: int, top_k: int, 
     scaler1 = MinMaxScaler()
     scaler2 = MinMaxScaler()
     # Normalize the columns
-    external_similarity_sum_normalized = scaler1.fit_transform(external_similarity_sum.reshape(-1,1))
-    parameter_knowledge_difference_sum_normalized = scaler2.fit_transform(parameter_knowledge_difference_sum.reshape(-1,1))
+    external_similarity_sum_normalized = scaler1.fit_transform(external_similarity_sum.reshape(-1, 1))
+    parameter_knowledge_difference_sum_normalized = scaler2.fit_transform(
+        parameter_knowledge_difference_sum.reshape(-1, 1))
     collect_info.update({
         "head_max_min": [scaler1.data_max_[0], scaler1.data_min_[0]],
         "layers_max_min": [scaler2.data_max_[0], scaler2.data_min_[0]]
     })
     # Subtract the normalized columns
-    difference_normalized = m * parameter_knowledge_difference_sum_normalized - alpha * external_similarity_sum_normalized
+    difference_normalized = np.array(
+        m * parameter_knowledge_difference_sum_normalized - alpha * external_similarity_sum_normalized)
 
     # Calculate AUC for the difference
     auc_difference_normalized = roc_auc_score(dc['hallucination_label_concat'], difference_normalized)
@@ -124,36 +127,24 @@ def calculate_auc_pcc_32_32(dc: dict, copy_heads: list, top_n: int, top_k: int, 
         "Normalized Difference Pearson Correlation": person_difference_normalized
     })
 
+    split_lengths = [len(dc['statics'][k]['external_similarity']) for k in dc['statics'].keys()]
+    split_points = np.cumsum(split_lengths)[:-1]
+    difference_normalized_split = np.split(difference_normalized, split_points)
+    hallucination_label_split = np.split(dc['hallucination_label_concat'], split_points)
+    difference_normalized_mean = np.array([np.mean(arr) for arr in difference_normalized_split])
+    hallucination_label = np.array([np.max(arr) for arr in hallucination_label_split])
 
-    for k in dc['statics'].keys():
-        amount_values = len(dc['statics'][k]["'external_similarity'"])
-        hallucination_label =
-
-
-    # Group by 'identifier' and calculate the sum of 'difference_normalized' and max of 'hallucination_label'
-    dc['response_group'] = dc['identifier'].str.extract(r'(response_\d+)')
-    # Group by 'response_group' and calculate the sum of 'difference_normalized' and max of 'hallucination_label'
-    grouped_df = dc.groupby('response_group').agg(
-        difference_normalized_mean=('difference_normalized', 'mean'),
-        hallucination_label=('hallucination_label', 'max')
-    ).reset_index()
-
-    min_val = grouped_df['difference_normalized_mean'].min()
-    max_val = grouped_df['difference_normalized_mean'].max()
-    collect_info.update({'final_max_min': [max_val, min_val]})
-    # 进行归一化
-    grouped_df['difference_normalized_mean_norm'] = (grouped_df['difference_normalized_mean'] - min_val) / (
-            max_val - min_val)
+    min_val = difference_normalized_mean.min()
+    max_val = difference_normalized_mean.max()
+    difference_normalized_mean_norm = (difference_normalized_mean - min_val) / (max_val - min_val)
 
     # Calculate AUC for the grouped means
-    auc_difference_normalized = roc_auc_score(grouped_df['hallucination_label'],
-                                              grouped_df['difference_normalized_mean_norm'])
-    person_difference_normalized, _ = pearsonr(grouped_df['hallucination_label'],
-                                               grouped_df['difference_normalized_mean_norm'])
+    auc_difference_normalized_norm = roc_auc_score(hallucination_label, difference_normalized_mean_norm)
+    person_difference_normalized_norm, _ = pearsonr(hallucination_label, difference_normalized_mean_norm)
 
-    results.update({"Grouped means AUC": auc_difference_normalized})
-    results.update({"Grouped means Pearson Correlation": person_difference_normalized})
-    return auc_difference_normalized, person_difference_normalized
+    results.update({"Grouped means AUC": auc_difference_normalized_norm})
+    results.update({"Grouped means Pearson Correlation": person_difference_normalized_norm})
+    return auc_difference_normalized_norm, person_difference_normalized_norm, results
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -177,16 +168,16 @@ def main(args: argparse.Namespace):
     dc, info = construct_dataframe(args.dataset_path)  # output of token_level_detect
     auc_ext_sim_list, pearson_ext_sim_list, auc_param_know_list, pearson_param_know_list = calculate_auc_pcc(dc)
 
-    auc_difference_normalized, person_difference_normalized = calculate_auc_pcc_32_32(dc, info["copy_heads"],
-                                                                                      args.top_n, args.top_k,
-                                                                                      args.alpha,
-                                                                                      auc_ext_sim_list,
-                                                                                      auc_param_know_list,
-                                                                                      args.m)
+    auc_difference_normalized, person_difference_normalized, results = calculate_auc_pcc_32_32(dc, info["copy_heads"],
+                                                                                               args.top_n, args.top_k,
+                                                                                               args.alpha,
+                                                                                               auc_ext_sim_list,
+                                                                                               auc_param_know_list,
+                                                                                               args.m)
 
-    result_dict = {"auc": auc_difference_normalized, "pcc": person_difference_normalized}
+    result_dict = {"auc": auc_difference_normalized, "pcc": person_difference_normalized, **results}
     print(result_dict)
-    with open(save_path, 'w') as f:
+    with Path(args.output).open("w") as f:
         json.dump(result_dict, f, ensure_ascii=False)
 
 

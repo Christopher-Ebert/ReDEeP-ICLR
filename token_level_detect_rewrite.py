@@ -2,7 +2,7 @@ import warnings
 from pathlib import Path
 from typing import Any, Iterable, Dict, List, Tuple
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import json
 from torch.nn import functional as F
 import argparse
