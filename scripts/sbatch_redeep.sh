@@ -10,7 +10,8 @@
 #SBATCH --container-mounts=/netscratch/ebert/ReDEeP-ICLR:/workspace
 #SBATCH --container-image=/enroot/nvcr.io_nvidia_pytorch_25.05-py3.sqsh
 
+hf_token=$1
 
 ./mkenv.sh
-python token_level_detect_rewrite.py -m meta-llama/Llama-2-7b-chat-hf -d ./dataset/response_span_llama-2-7b-chat.json -c ./copy_heads/llama27b_copy_heads.json -t <token> -o ./redeep_llama27b.json
+python token_level_detect_rewrite.py -m meta-llama/Llama-2-7b-chat-hf -d ./dataset/response_span_llama-2-7b-chat.json -c ./copy_heads/llama27b_copy_heads.json -t "$hf_token" -o ./redeep_llama27b.json
 python token_level_detect_reg.py -d ./redeep_llama27b.json -nh 1 -nl 10 -a 0.2 -m 1 -o ./redeep_llama27b_reg_score.json
