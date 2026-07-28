@@ -4,5 +4,5 @@ accelerate
 numpy
 tqdm
 sentence-transformers
-transformers
+tokenizers
 # torch
