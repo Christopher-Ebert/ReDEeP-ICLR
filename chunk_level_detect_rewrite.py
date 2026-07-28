@@ -1,5 +1,4 @@
-from enum import Enum
-from dataclasses import dataclass
+import warnings
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Iterable
 import torch
@@ -10,88 +9,65 @@ from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import argparse
-import os
-from itertools import pairwise
-from torch import randn
-
-cache_folder = "./data"
-os.environ["HF_TOKEN"] = ""
 
 
-class ReDeEP_Configs:
-    class ModelName(Enum):
-        """Enumeration of supported model names."""
-        LLAMA2_7B = "meta-llama/Llama-2-7b-chat-hf"
-        LLAMA2_13B = "meta-llama/Llama-2-13b-chat-hf"
-        LLAMA3_8B = "meta-llama/Meta-Llama-3-8B-Instruct"
+class JsonEncoder(json.JSONEncoder):
+    """
+    json encoder allowing for serialization of pydantic and exception objects.
+    """
 
-    @dataclass
-    class ModelConfig:
-        """Configuration for a specific model."""
-        name: str
-        topk_heads_path: str
-        start_layer: int
-        num_layers: int
-
-    # Model configurations mapping
-    MODEL_CONFIGS = {
-        ModelName.LLAMA2_7B: ModelConfig(
-            name="llama2/llama-2-7b-chat-hf",
-            topk_heads_path="./log/test_llama2_7B/topk_heads.json",
-            start_layer=0,
-            num_layers=32
-        ),
-        ModelName.LLAMA2_13B: ModelConfig(
-            name="llama2/llama-2-13b-chat-hf",
-            topk_heads_path="./log/test_llama2_13B/topk_heads.json",
-
-            start_layer=8,
-            num_layers=40
-        ),
-        ModelName.LLAMA3_8B: ModelConfig(
-            name="llama3/Meta-Llama-3-8B-Instruct/",
-            topk_heads_path="./log/test_llama3_8B/topk_heads.json",
-
-            start_layer=0,
-            num_layers=16
-        ),
-    }
-
-    class Dataset(Enum):
-        """Enumeration of supported datasets."""
-        RAGTRUTH = "ragtruth"
-        DOLLY = "dolly"
-
-    # Dataset paths mapping
-    DATASET_PATHS = {
-        Dataset.RAGTRUTH: {
-            "response_path": "/mnt/internal/sata-ssd/GitHub/SteffenLuminaETC/ReDeEP/dataset/response.jsonl",
-            "source_info_path": "/mnt/internal/sata-ssd/GitHub/SteffenLuminaETC/ReDeEP/dataset/source_info_spans.jsonl",
-        },
-        Dataset.DOLLY: {
-            "response_path": "../dataset/response_dolly_spans.jsonl",
-            "source_info_path": "../dataset/source_info_dolly_spans.jsonl",
-        },
-    }
+    def default(self, o):
+        if isinstance(o, torch.Tensor):
+            return o.tolist()
+        if isinstance(o, bool):
+            return int(o)
+        return super().default(o)
 
 
-def load_data(dataset_path):
-    with Path(dataset_path).open() as f:
-        data = json.load(f)
+def load_data(fp, amount: int = -1, ):
+    with Path(fp).open() as f:
+        data: dict = json.load(f)
+
+    # handling amount
+    if amount == -1:
+        return data
+    avail_keys = list(data.keys())[:amount]
+    data = {k: data[k] for k in avail_keys}
     return data
 
 
-def load_model_and_tokenizer(model_name):
+def load_copy_heads(fp) -> tuple[list, str]:
+    data = load_data(fp)
+    return data['copy_heads'], data["model"]
+
+
+def load_model_and_tokenizer(model_name, cache_dir, hf_token) -> Tuple:
     """Load the model, tokenizer, and optional tokenizer for template."""
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         device_map="auto",
-        dtype=torch.float16,
-        cache_dir=cache_folder,
-        attn_implementation="eager"
+        torch_dtype=torch.bfloat16,
+        cache_dir=cache_dir,
+        attn_implementation="eager",
+        token=hf_token
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=cache_folder)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir, token=hf_token)
     return model, tokenizer
+
+
+def add_special_template(prompt: str, tokenizer: Any) -> str:
+    """Add special chat template to the prompt."""
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": prompt},
+    ]
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    return text
+
 
 def calculate_dist(sep_vocabulary_dist: torch.Tensor, sep_attention_dist: torch.Tensor) -> float:
     """Calculate Jensen-Shannon divergence between two distributions."""
@@ -110,6 +86,7 @@ def calculate_dist(sep_vocabulary_dist: torch.Tensor, sep_attention_dist: torch.
     return js_divs.cpu().item() * 10e5
 
 
+# TODO: check this
 def calculate_dist_2d(sep_vocabulary_dist: torch.Tensor, sep_attention_dist: torch.Tensor) -> float:
     """Calculate 2D Jensen-Shannon divergence between two distributions."""
     softmax_mature_layer = F.softmax(sep_vocabulary_dist, dim=-1)
@@ -125,7 +102,7 @@ def calculate_dist_2d(sep_vocabulary_dist: torch.Tensor, sep_attention_dist: tor
     js_divs = 0.5 * (kl1 + kl2)
 
     scores = js_divs.cpu().tolist()
-    return sum(scores) if isinstance(list, scores) else scores
+    return sum(scores) if isinstance(scores, list) else scores
 
 
 def calculate_ma_dist(sep_vocabulary_dist: torch.Tensor, sep_attention_dist: torch.Tensor) -> float:
@@ -138,6 +115,7 @@ def calculate_ma_dist(sep_vocabulary_dist: torch.Tensor, sep_attention_dist: tor
 
     return manhattan_distance.cpu().item()
 
+
 def is_hallucination_token(token_id: int, hallucination_spans: List[List[int]]) -> bool:
     """Check if a token ID falls within any hallucination span."""
     for span in hallucination_spans:
@@ -146,24 +124,23 @@ def is_hallucination_token(token_id: int, hallucination_spans: List[List[int]]) 
     return False
 
 
-def is_hallucination_span(r_span: List[int], hallucination_spans: List[List[int]]) -> bool:
+def is_hallucination_span(response_span: List[int], hallucination_spans: List[List[int]]) -> bool:
     """Check if any token in a response span falls within any hallucination span."""
-    for token_id in range(r_span[0], r_span[1]):
+    for token_id in range(response_span[0], response_span[1]):
         if is_hallucination_token(token_id, hallucination_spans):
             return True
     return False
 
 
 def calculate_hallucination_spans(
-        response: List[Dict],
+        labels: Any,
         text: str,
         response_rag: str,
         tokenizer: Any,
-        prefix_len: int
 ) -> List[List[int]]:
     """Calculate hallucination spans in token IDs."""
     hallucination_span = []
-    for item in response:
+    for item in labels:
         start_id = item['start']
         end_id = item['end']
         start_text = text + response_rag[:start_id]
@@ -175,24 +152,12 @@ def calculate_hallucination_spans(
         hallucination_span.append([start_id, end_id])
     return hallucination_span
 
-def add_special_template(prompt: str, tokenizer: Any) -> str:
-    """Add special chat template to the prompt."""
-    messages = [
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": prompt}
-    ]
-    text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    return text
 
 def calculate_respond_spans(
         raw_response_spans: List[List[int]],
         text: str,
         response_rag: str,
-        tokenizer: Any
+        tokenizer: Any,
 ) -> List[List[int]]:
     """Calculate response spans in token IDs."""
     respond_spans = []
@@ -229,142 +194,137 @@ def calculate_prompt_spans(
     return prompt_spans
 
 
-def calculate_sentence_similarity(r_text: str, p_text: str, bge_model: SentenceTransformer) -> float:
+def calculate_sentence_similarity(response_text: str, prompt_text: str, bge_model: SentenceTransformer) -> float:
     """Calculate sentence similarity using BGE model."""
-    part_embedding = bge_model.encode([r_text], normalize_embeddings=True)
-    q_embeddings = bge_model.encode([p_text], normalize_embeddings=True)
+    part_embedding = bge_model.encode([response_text], normalize_embeddings=True)
+    q_embeddings = bge_model.encode([prompt_text], normalize_embeddings=True)
 
     scores_named = np.matmul(q_embeddings, part_embedding.T).flatten()
     return float(scores_named[0])
 
+
 def process_responses(
-        dataset,
+        dataset: dict[str, dict[str, Any]],
         model: Any,
         tokenizer: Any,
         copy_heads: Iterable[Iterable[int]],
         bge_model: SentenceTransformer,
-) -> Dict:
-    """Process a single response item and calculate scores."""
+        knowledge_layers: List[int],
+) -> dict[str, dict[str, Any]]:
     dc = {}
-    for k, v in dataset.items():
-        response_rag = v['response']
-        prompt = v['prompt']
-        prompt_spans = v["prompt_spans"]
-        original_prompt_spans = v['prompt_spans']
-        original_response_spans = v['response_spans']
-        labels: List | Tuple = v["labels"]
+    for dataset_key, dataset_value in tqdm(dataset.items(), desc="processing ReDeEP chunk level detection."):
+        torch.cuda.empty_cache()
+        response_rag = dataset_value['response']
+        prompt = dataset_value['prompt']
+        prompt_spans = dataset_value["prompt_spans"]
+        original_prompt_spans = dataset_value['prompt_spans']
+        original_response_spans = dataset_value['response_spans']
+        labels: List | Tuple = dataset_value["labels"]
 
         text = add_special_template(prompt[:12000], tokenizer)
         input_text = text + response_rag
 
-        print("all_text_len:", len(input_text))
-        print("prompt_len", len(prompt))
-        print("respond_len", len(response_rag))
-
         input_ids = tokenizer([input_text], return_tensors="pt").input_ids
         prefix_ids = tokenizer([text], return_tensors="pt").input_ids
-        continue_ids = input_ids[0, prefix_ids.shape[-1]:] # not used in original code base as well
+        # continue_ids = input_ids[0, prefix_ids.shape[-1]:]  # not used in original code base as well
 
         hallucination_spans = []
         if labels is not None or len(labels) != 0:
-            hallucination_spans = calculate_hallucination_spans(
-                labels, text, response_rag, tokenizer, prefix_ids.shape[-1]
-            )
+            hallucination_spans = calculate_hallucination_spans(labels, text, response_rag, tokenizer)
 
-        prompt_spans = calculate_prompt_spans(prompt_spans, prompt, tokenizer,)
+        prompt_spans = calculate_prompt_spans(prompt_spans, prompt, tokenizer, )
         respond_spans = calculate_respond_spans(original_response_spans, text, response_rag, tokenizer)
 
         with torch.no_grad():
-            outputs = model(  # originally: logits_dict, outputs
-                input_ids=input_ids,
-                return_dict=True,
+            logits_dict, outputs = model(
+                input_ids=input_ids.to(model.device),
                 output_attentions=True,
                 output_hidden_states=True,
-                # knowledge_layers=list(range(model_config.start_layer, model_config.num_layers)) #TODO: do this
+                knowledge_layers=list(range(knowledge_layers[0], knowledge_layers[1]))
             )
-        # not sure what this does, probably pushing the labels (non-hallucinated:0, hallucinated:1) layerwise to device?
-        # logits_dict = {key: [value[0].to(model.device), value[1].to(model.device)] for key, value in logits_dict.items()}
 
-        # pairwise combining each layers output with the next.
-        logits_pairwise = pairwise(outputs.logits[0])
+        logits_dict = {key: [value[0], value[1]] for key, value in logits_dict.items()}
+        score_dict = {}
         for response_id, response_span in enumerate(respond_spans):
             layer_head_span = {}
             # assumes that attn_layer and head exist in model
             for attn_layer_id, head_id in copy_heads:
-                scores = [] # p_span_score_dict. only saving mapping score, not p_span
-                #Step 1, Eq.2 identify attended tokens
+                scores = []  # p_span_score_dict. only saving mapping score, not p_span
+                # Step 1, Eq.2 identify attended tokens
                 for prompt_span in prompt_spans:
                     attention_score = outputs.attentions[attn_layer_id][0, head_id, :, :]
                     _score = torch.sum(attention_score[response_span[0]:response_span[1], prompt_span[0]:prompt_span[1]]).cpu().item()
                     scores.append(_score)
-                p_id = scores.index(max(scores)) # prompt_spans[scores.index(max(scores))] # Extrahieren Sie das p_span, das dem höchsten Wert entspricht.
+                p_id = scores.index(
+                    max(scores))  # prompt_spans[scores.index(max(scores))] # Extrahieren Sie das p_span, das dem höchsten Wert entspricht.
                 prompt_span_text = prompt[original_prompt_spans[p_id][0]:original_prompt_spans[p_id][1]]
                 respond_span_text = response_rag[original_response_spans[response_id][0]:original_response_spans[response_id][1]]
-                layer_head_span[str((attn_layer_id, head_id))] = calculate_sentence_similarity(prompt_span_text, respond_span_text, bge_model)
-
+                layer_head_span[str((attn_layer_id, head_id))] = calculate_sentence_similarity(prompt_span_text, respond_span_text,
+                                                                                               bge_model)
             parameter_knowledge_scores = [
-                calculate_dist_2d(value[0][response_span[0]:response_span[1]], value[1][response_span[0]:response_span[1]])
-                for value in list(logits_pairwise) #logits_dict.values()
-            ]
+                calculate_dist_2d(value[0][0, response_span[0]:response_span[1], :], value[1][0, response_span[0]:response_span[1], :]) for
+                value in logits_dict.values()]
             parameter_knowledge_dict = {f"layer_{i}": value for i, value in enumerate(parameter_knowledge_scores)}
 
-            dc[k] = {
-                "key": k,
+            score_dict[response_id] = {
                 "prompt_attention_score": layer_head_span,
                 "response_span": response_span,
                 "hallucination_label": 1 if is_hallucination_span(response_span, hallucination_spans) else 0,
-                "parameter_knowledge_scores": parameter_knowledge_dict
+                "parameter_knowledge_scores": parameter_knowledge_dict,
             }
+        dc[dataset_key] = {"key": dataset_key, "scores": score_dict, **dataset_value}
     return dc
 
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='ReDeEP Chunk detection.')
-    parser.add_argument(
-        '--model_name',
-        type=str,
-        required=True, help='huggingface model'
-    )
-    parser.add_argument("--response_path")
-    parser.add_argument("--source_info_path")
-    parser.add_argument("--topk_heads_path", type=str, help="topk heads to use")
-    parser.add_argument("--output", type=str, default=..., help="output path")  # TODO: do me.
-    return parser.parse_args()
+    parser = argparse.ArgumentParser(description='ReDeEP token level detection.')
+    parser.add_argument("-m", '--model_name', type=str, required=True, help='huggingface model identifyer')
+    parser.add_argument("-d", "--dataset_path", type=str, required=True, help=f"path to dataset")
+    parser.add_argument("-c", "--copy_heads_path", type=str, required=False, default=None,
+                        help="topk heads to use as json_file.")
+    parser.add_argument("-o", "--output", type=str, default="./redeep_token_level_detection.json",
+                        help="output path. Default: ./redeep_token_level_detection.json")
+    parser.add_argument("--cache_dir", type=str, default="./cache_dir",
+                        help="cache directory for saving superficial data")
+    parser.add_argument("-t", "--token", type=str, help="huggingface token. can also be set using environmental.")
+    parser.add_argument("-a", "--amount", type=int, default=-1, help="amount of datapoints to analyze")
+    parser.add_argument("-k", "--knowledge_layers", required=False, nargs=2, default=[0, 32], help="knowledge layers")
+
+    args = parser.parse_args()
+    args.knowledge_layers = [int(i) for i in args.knowledge_layers]
+    return args
 
 
-def main():
+def main(args: argparse.Namespace):
     """Main function to orchestrate the processing pipeline."""
-    # args = parse_arguments()
-    args = argparse.Namespace()
-    # TODO remove test params
-    args.model_name = ReDeEP_Configs.ModelName.LLAMA2_7B.value
-    args.dataset_path = r"/mnt/internal/sata-ssd/GitHub/SteffenLuminaETC/ReDeEP/dataset/response_span_llama-2-7b-chat.json"
-    copy_heads = [[25, 0], [18, 13], [18, 10], [27, 9], [5, 29], [23, 8], [31, 28], [3, 0], [31, 24], [13, 20],
-                  [31, 18], [1, 14], [2, 5], [22, 10], [2, 22], [15, 7], [3, 19], [20, 17], [10, 20], [23, 30],
-                  [20, 22], [1, 27], [20, 1], [31, 19], [28, 18], [20, 15], [1, 21], [19, 1], [20, 5], [16, 1], [18, 9],
-                  [5, 13]]
+    # setup
+    copy_heads, copy_heads_model = load_copy_heads(args.copy_heads_path)
+    if args.model_name != copy_heads_model:
+        warnings.warn(
+            f"provided copy_heads file was created with different model as currently provided. Please check that this is expected. "
+            f"model_name={args.model_name} copy_heads_model={copy_heads_model}")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model_name = args.model_name
+    dataset = load_data(args.dataset_path, args.amount)
+    model, tokenizer = load_model_and_tokenizer(args.model_name, args.cache_dir, args.token)
 
-    bge_model = SentenceTransformer("BAAI/bge-base-en-v1.5", cache_folder=cache_folder).to(device)
-    dataset = load_data(args.dataset_path)
-    model, tokenizer = load_model_and_tokenizer(model_name)
+    bge_model = SentenceTransformer("BAAI/bge-base-en-v1.5", cache_folder=args.cache_dir, token=args.token).to("cuda")
     processed_responses = process_responses(
         dataset,
         model,
         tokenizer,
         copy_heads,
         bge_model,
+        args.knowledge_layers
     )
-    exit()
-    save_path = Path("./test_save_path.json")
+    # saving
+    save_path = Path(args.output)
     with save_path.open("w") as f:
-        json.dump(processed_responses, f, ensure_ascii=False)
-
+        json.dump(processed_responses, f, ensure_ascii=False, cls=JsonEncoder, indent=1, )
     print(f"Results saved to {save_path}")
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_arguments()
+    # args = test_args()
+    main(args)
