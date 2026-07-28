@@ -138,6 +138,7 @@ def process_responses(
 ) -> dict[str, dict[str, Any]]:
     dc = {}
     for dataset_key, dataset_value in tqdm(dataset.items(), desc="processing ReDeEP token level detection."):
+        torch.cuda.empty_cache()
         response_rag = dataset_value['response']
         prompt = dataset_value['prompt']
         labels: List | Tuple = dataset_value["labels"]
@@ -147,8 +148,7 @@ def process_responses(
 
         input_ids = tokenizer([input_text], return_tensors="pt").input_ids
         prefix_ids = tokenizer([text], return_tensors="pt").input_ids
-        continue_ids = input_ids[0, prefix_ids.shape[
-                                        -1]:]  # todo 这边要改成幻觉 token 的起止位置 -> This needs to be changed to the start and end positions of the hallucination tokens.
+        #continue_ids = input_ids[0, prefix_ids.shape[-1]:]  # todo 这边要改成幻觉 token 的起止位置 -> This needs to be changed to the start and end positions of the hallucination tokens.
 
         hallucination_spans = []
         if labels is not None or len(labels) != 0:
@@ -162,7 +162,7 @@ def process_responses(
                 knowledge_layers=list(range(knowledge_layers[0], knowledge_layers[1]))
             )
 
-        logits_dict = {key: [value[0].to(model.device), value[1].to(model.device)] for key, value in
+        logits_dict = {key: [value[0], value[1]] for key, value in
                        logits_dict.items()}
         # skip tokens without hallucination
         # outputs.hidden_states = tuple ([batch, seq_len, vocab_size], ..., )
