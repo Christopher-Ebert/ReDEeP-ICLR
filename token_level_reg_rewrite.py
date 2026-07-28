@@ -22,7 +22,6 @@ def construct_dataframe(fp) -> tuple[dict[str, np.ndarray], dict]:
         data: dict = json.load(f)
         info = data.pop("info")
     response = {"statics": data}
-    # print("hallucination_label value_counts:", df["hallucination_label"].value_counts(normalize=True))
     external_similarity_concat = np.concatenate([v["external_similarity"] for k, v in data.items()], axis=0).T
     parameter_knowledge_concat = np.concatenate([v["parameter_knowledge_difference"] for k, v in data.items()], axis=0).T
     hallucination_label_concat = np.concatenate([v["hallucination_label"] for k, v in data.items()], axis=0)
