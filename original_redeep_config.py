@@ -1,6 +1,6 @@
 from enum import Enum
-
 from dataclasses import dataclass
+
 
 class ReDeEP_Configs:
     class ModelName(Enum):
@@ -19,31 +19,31 @@ class ReDeEP_Configs:
         ragtruth: dict
         dolly: dict
 
-    # Model configurations mapping
     MODEL_CONFIGS = {
         ModelName.LLAMA2_7B: ModelConfig(
             name=ModelName.LLAMA2_7B.value,
             topk_heads_path="./log/test_llama2_7B/topk_heads.json",
             start_layer=0,
             num_layers=32,
-            ragtruth={"top_n":1, "top_k":10, "alpha":0.2, "m":1},
-            dolly={"top_n":4, "top_k":3, "alpha":0.2, "m":1}
+            ragtruth={"top_n_heads": 1, "top_n_layers": 10, "external_sim_scaling": 0.2, "param_know_scaling": 1},
+            # original naming convention top_n, top_k, alpha, m
+            dolly={"top_n_heads": 4, "top_n_layers": 3, "external_sim_scaling": 0.2, "param_know_scaling": 1}
         ),
         ModelName.LLAMA2_13B: ModelConfig(
             name=ModelName.LLAMA2_13B.value,
             topk_heads_path="./log/test_llama2_13B/topk_heads.json",
             start_layer=8,
             num_layers=40,
-            ragtruth={"top_n": 2, "top_k": 17, "alpha": 0.6, "m": 1},
-            dolly={"top_n": 4, "top_k": 5, "alpha": 0.6, "m": 1}
+            ragtruth={"top_n_heads": 2, "top_n_layers": 17, "external_sim_scaling": 0.6, "param_know_scaling": 1},
+            dolly={"top_n_heads": 4, "top_n_layers": 5, "external_sim_scaling": 0.6, "param_know_scaling": 1}
         ),
         ModelName.LLAMA3_8B: ModelConfig(
             name=ModelName.LLAMA3_8B.value,
             topk_heads_path="./log/test_llama3_8B/topk_heads.json",
             start_layer=0,
             num_layers=16,
-            ragtruth={"top_n": 3, "top_k": 30, "alpha": 0.4, "m": 1},
-            dolly={"top_n": 1, "top_k": 1, "alpha": 0.1, "m": 1}
+            ragtruth={"top_n_heads": 3, "top_n_layers": 30, "external_sim_scaling": 0.4, "param_know_scaling": 1},
+            dolly={"top_n_heads": 1, "top_n_layers": 1, "external_sim_scaling": 0.1, "param_know_scaling": 1}
         ),
     }
 
@@ -52,7 +52,6 @@ class ReDeEP_Configs:
         RAGTRUTH = "ragtruth"
         DOLLY = "dolly"
 
-    # Dataset paths mapping
     DATASET_PATHS = {
         Dataset.RAGTRUTH: {
             "response_path": "/mnt/internal/sata-ssd/GitHub/SteffenLuminaETC/ReDeEP/dataset/response.jsonl",
