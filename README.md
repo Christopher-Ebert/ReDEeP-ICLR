@@ -62,7 +62,22 @@ The `chunk_level_detect_rewrite.py` and `chunk_level_reg_rewrite.py` scripts acc
 
 ### Performance Comparison
 
-| Metric | Original Paper | Original Repository | This Replication |
-|--------|----------------|---------------------|------------------|
-| AUC    | -              | -                   | -                |
-| PCC    | -              | -                   | -                |
+### RAGTruth
+
+##### Token-Level Detection
+
+| Model              | Metric | Original Paper | Original Repository | This Replication | Hyperparameters |
+|--------------------|--------|----------------|---------------------|------------------|-----------------|
+| Llama-2-7b-chat    | AUC    | 0.7325         | -                   | -                | knowledge_layers=[0,32] |
+|                    | PCC    | 0.3979         | -                   | -                | top_n_heads=1    |
+|                    | REC    | 0.6770         | -                   | -                | top_n_layers=10  |
+|                    | F1     | 0.6986         | -                   | -                | external_sim_scaling=0.2 |
+
+##### Chunk-Level Detection
+
+| Model              | Metric | Original Paper | Original Repository | This Replication | Hyperparameters |
+|--------------------|--------|----------------|---------------------|------------------|-----------------|
+| Llama-2-7b-chat    | AUC    | 0.7458         | -                   | -                | knowledge_layers=[0,32] |
+|                    | PCC    | 0.4203         | -                   | -                | top_n_heads=1    |
+|                    | REC    | 0.8097         | -                   | -                | top_n_layers=10  |
+|                    | F1     | 0.7190         | -                   | -                | external_sim_scaling=0.2 |
