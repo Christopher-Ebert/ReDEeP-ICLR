@@ -119,7 +119,7 @@ def add_special_template(prompt: str, tokenizer: Any) -> str:
     """Add special chat template to the prompt."""
     messages = [
         {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": prompt}
+        {"role": "user", "content": prompt},
     ]
     text = tokenizer.apply_chat_template(
         messages,
@@ -134,7 +134,7 @@ def process_responses(
         model: Any,
         tokenizer: Any,
         copy_heads: Iterable[Iterable[int]],
-        knowledge_layers: List[int]
+        knowledge_layers: List[int],
 ) -> dict[str, dict[str, Any]]:
     dc = {}
     for dataset_key, dataset_value in tqdm(dataset.items(), desc="processing ReDeEP token level detection."):
@@ -148,7 +148,8 @@ def process_responses(
 
         input_ids = tokenizer([input_text], return_tensors="pt").input_ids
         prefix_ids = tokenizer([text], return_tensors="pt").input_ids
-        #continue_ids = input_ids[0, prefix_ids.shape[-1]:]  # todo 这边要改成幻觉 token 的起止位置 -> This needs to be changed to the start and end positions of the hallucination tokens.
+        # continue_ids = input_ids[0, prefix_ids.shape[-1]:]  # todo 这边要改成幻觉 token 的起止位置 -> This needs to be changed to the start and end
+        #  positions of the hallucination tokens.
 
         hallucination_spans = []
         if labels is not None or len(labels) != 0:
@@ -162,20 +163,22 @@ def process_responses(
                 knowledge_layers=list(range(knowledge_layers[0], knowledge_layers[1]))
             )
 
-        logits_dict = {key: [value[0], value[1]] for key, value in
-                       logits_dict.items()}
+        logits_dict = {key: [value[0], value[1]] for key, value in logits_dict.items()}
         # skip tokens without hallucination
         # outputs.hidden_states = tuple ([batch, seq_len, vocab_size], ..., )
         last_hidden_states = outputs.hidden_states[-1][0, :, :]  # [prefix_len, hidden_size]
         outputs.hidden_states = None  # memory optimization
 
-        # todo 修改成 筛选 teacher focusing 的 token 和 model generate token 是否在 top_10内 -> Modify this to filter for tokens where the teacher's focus and the model's generated token both fall within the top 10.
+        # todo 修改成 筛选 teacher focusing 的 token 和 model generate token 是否在 top_10内 -> Modify this to filter for tokens where the teacher's
+        #  focus and the model's generated token both fall within the top 10.
         # probs = outputs['logits'][range(outputs["logits"].shape[0]), continue_ids].sum().item()
         # # ---------------------------------------------------------------------------------------------------------------
-        external_similarity = []  # 这个用来存储生成的 token embedding 和 copy head 关注的 token embedding 的相似度得分 -> This is used to store the similarity scores between the generated token embeddings and the token embeddings attended to by the copy head.
+        external_similarity = []  # 这个用来存储生成的 token embedding 和 copy head 关注的 token embedding 的相似度得分 -> This is used to store the
+        # similarity scores between the generated token embeddings and the token embeddings attended to by the copy head.
         parameter_knowledge_difference = []
         hallucination_label = []
-        # 计算一下输入的 context 里面有没有 hallucination 词，如果有的话 copy 的时候把他们的 pointer weight 调小 -> Check the input context for "hallucination" words; if any are found, reduce their pointer weights during copying.
+        # 计算一下输入的 context 里面有没有 hallucination 词，如果有的话 copy 的时候把他们的 pointer weight 调小 -> Check the input context for "hallucination"
+        # words; if any are found, reduce their pointer weights during copying.
         # input: input_ids, corr token vocab distribution
         # output: hallucination score for the input_ids or hallucination mask
         # outputs.attentions is a tuple, taking the last layer's attentions
@@ -199,7 +202,8 @@ def process_responses(
             # Create an extended attention mask that masks out special tokens
             # hyperparameter: token rate
 
-            # pointer_probs_list 是每个位置对应的大小(head_num, seq_len)，last_hidden_states shape (seq_len, hidden_state)是每个位置对应的 value，请取出 top 10% input_ids_cp 的 last_hidden_states，最终输出为(head_num, top10_len, hidden_state)
+            # pointer_probs_list 是每个位置对应的大小(head_num, seq_len)，last_hidden_states shape (seq_len, hidden_state)是每个位置对应的 value，请取出 top 10%
+            # input_ids_cp 的 last_hidden_states，最终输出为(head_num, top10_len, hidden_state)
             # 获取top 10%的索引
             # ->
             # `pointer_probs_list` contains values ​​of shape `(head_num, seq_len)` for each position, and
@@ -214,9 +218,11 @@ def process_responses(
             # 选择前top_k个索引 -> Select the top-k indices.
             top_k_indices = sorted_indices[:, :top_k]
 
-            # 我们需要将 top_k_indices 展平，以便用于索引 last_hidden_states -> We need to flatten `top_k_indices` so that it can be used to index `last_hidden_states`.
+            # 我们需要将 top_k_indices 展平，以便用于索引 last_hidden_states -> We need to flatten `top_k_indices` so that it can be used to index
+            # `last_hidden_states`.
             flattened_indices = top_k_indices.flatten()  # shape (head_num * k,)
-            # 使用展平的索引在 last_hidden_states 中查找相应的 hidden_state -> Use the flattened indices to look up the corresponding hidden state in `last_hidden_states`.
+            # 使用展平的索引在 last_hidden_states 中查找相应的 hidden_state -> Use the flattened indices to look up the corresponding hidden state in
+            # `last_hidden_states`.
             selected_hidden_states = last_hidden_states[flattened_indices]  # shape (head_num * k, hidden_state)
             # 重新 reshape 成 (head_num, k, hidden_state) -> Reshape into (head_num, k, hidden_state)
             top_k_hidden_states = selected_hidden_states.view(top_k_indices.shape[0], top_k_indices.shape[1], -1)
@@ -256,7 +262,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("-m", '--model_name', type=str, required=True, help='huggingface model identifyer')
     parser.add_argument("-d", "--dataset_path", type=str, required=True, help=f"path to dataset")
     parser.add_argument("-c", "--copy_heads_path", type=str, required=False, default=None,
-                        help="topk heads to use as json_file.")  # TODO: impl 'all' flag
+                        help="topk heads to use as json_file.")
     parser.add_argument("-o", "--output", type=str, default="./redeep_token_level_detection.json",
                         help="output path. Default: ./redeep_token_level_detection.json")
     parser.add_argument("--cache_dir", type=str, default="./cache_dir",
@@ -276,7 +282,8 @@ def main(args: argparse.Namespace):
     copy_heads, copy_heads_model = load_copy_heads(args.copy_heads_path)
     if args.model_name != copy_heads_model:
         warnings.warn(
-            f"provided copy_heads file was created with different model as currently provided. Please check that this is expected. model_name={args.model_name} copy_heads_model={copy_heads_model}")
+            f"provided copy_heads file was created with different model as currently provided. Please check that this is expected. "
+            f"model_name={args.model_name} copy_heads_model={copy_heads_model}")
 
     dataset = load_data(args.dataset_path, args.amount)
     model, tokenizer = load_model_and_tokenizer(args.model_name, args.cache_dir, args.token)
