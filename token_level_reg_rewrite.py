@@ -16,8 +16,7 @@ def load_data(fp):
     return data
 
 
-def construct_dataframe(fp) -> tuple[dict[str, np.ndarray], dict]:
-    # Sample data for illustration
+def construct_dataframe(fp):
     with Path(fp).open() as f:
         data: dict = json.load(f)
         info = data.pop("info")
@@ -25,7 +24,7 @@ def construct_dataframe(fp) -> tuple[dict[str, np.ndarray], dict]:
     external_similarity_concat = np.concatenate([v["external_similarity"] for k, v in data.items()], axis=0).T
     parameter_knowledge_concat = np.concatenate([v["parameter_knowledge_difference"] for k, v in data.items()], axis=0).T
     hallucination_label_concat = np.concatenate([v["hallucination_label"] for k, v in data.items()], axis=0)
-    response.update({
+    response.update(**{
         "external_similarity_concat": external_similarity_concat,
         "parameter_knowledge_concat": parameter_knowledge_concat,
         "hallucination_label_concat": hallucination_label_concat,
@@ -56,12 +55,17 @@ def linear_regression(df: pd.DataFrame):
     return accuracy, report  # TODO: maybe add f1, recall, precision
 
 
-def calculate_auc_pcc(dc: dict) -> tuple[np.ndarray[float | int], ...]:
+def auc_pearson(y_true, y_score):
+    auc = roc_auc_score(y_true, y_score)
+    p = np.corrcoef(y_score, y_true, dtype=float)[-1][0]
+    return auc, p
+
+
+def calculate_auc_pcc(dc: dict):
     inv_labels = 1 - dc["hallucination_label_concat"]
-    auc_ext_sim_list = np.array([roc_auc_score(inv_labels, row) for row in dc["external_similarity_concat"][:-1]])
-    pearson_ext_sim_list = np.corrcoef(dc["external_similarity_concat"][:-1], inv_labels)[:-1, -1]
-    auc_param_know_list = np.array([roc_auc_score(inv_labels, row) for row in dc["parameter_knowledge_concat"][:-1]])
-    pearson_param_know_list = np.corrcoef(dc["parameter_knowledge_concat"][:-1], inv_labels)[:-1, -1]
+    auc_ext_sim_list, pearson_ext_sim_list = np.array([auc_pearson(inv_labels, row) for row in dc["external_similarity_concat"][:-1]]).T
+    auc_param_know_list, pearson_param_know_list = np.array(
+        [auc_pearson(inv_labels, row) for row in dc["parameter_knowledge_concat"][:-1]]).T
     return auc_ext_sim_list, pearson_ext_sim_list, auc_param_know_list, pearson_param_know_list
 
 
@@ -69,22 +73,16 @@ def min_max_normalization(x: np.ndarray):
     return (x - x.min()) / (x.max() - x.min())
 
 
-def auc_pearson(y_true, y_score):
-    auc = roc_auc_score(y_true, y_score)
-    p = np.corrcoef(y_score, y_true, dtype=float)[-1][0]
-    return auc, p
-
-
 # copy_heads <-> [attn_layer, head]
 def calculate_auc_pcc_32_32(dc: dict, copy_heads: list, auc_ext_arr: np.ndarray[float | int], auc_param_arr: np.ndarray[float | int],
                             top_n_heads: int = 3, top_n_layers: int = 3, external_sim_scaling: float = 0.2, param_know_scaling: int = 1):
-    collect_info = {}
+    results = {}
     # Sort by AUC and select the top N features (for example, top 5)
     top_n_auc_external_similarity_indx = auc_ext_arr.argsort(descending=True)[:top_n_heads]
     top_k_auc_parameter_knowledge_difference_indx = auc_param_arr.argsort(descending=True)[:top_n_layers]
 
     sorted_copy_heads = np.sort(np.array(copy_heads), axis=0)
-    collect_info.update({
+    results.update({
         "select_heads": sorted_copy_heads[top_n_auc_external_similarity_indx],
         "select_layers": top_k_auc_parameter_knowledge_difference_indx,
     })
@@ -103,7 +101,7 @@ def calculate_auc_pcc_32_32(dc: dict, copy_heads: list, auc_ext_arr: np.ndarray[
     # Normalize the columns
     external_similarity_sum_normalized = min_max_normalization(external_similarity_sum)
     parameter_knowledge_difference_sum_normalized = min_max_normalization(parameter_knowledge_difference_sum)
-    collect_info.update({
+    results.update({
         "head_max_min": (external_similarity_sum.max(), external_similarity_sum.min()),
         "layers_max_min": (parameter_knowledge_difference_sum.max(), parameter_knowledge_difference_sum.min()),
     })
@@ -115,12 +113,14 @@ def calculate_auc_pcc_32_32(dc: dict, copy_heads: list, auc_ext_arr: np.ndarray[
     auc_difference_normalized = auc_pearson(dc['hallucination_label_concat'], difference_normalized)
     results.update({"Normalized Difference (AUX, PEARSON)": auc_difference_normalized})
 
+    # this splits difference_normalized into its corresponding lengths dictated by attention-size if each input-sentence
     split_lengths = [len(dc['statics'][k]['external_similarity']) for k in dc['statics'].keys()]
     split_points = np.cumsum(split_lengths)[:-1]
     difference_normalized_split = np.split(difference_normalized, split_points)
     hallucination_label_split = np.split(dc['hallucination_label_concat'], split_points)
-    difference_normalized_mean = np.array([np.mean(arr) for arr in difference_normalized_split])
-    hallucination_label = np.array([np.max(arr) for arr in hallucination_label_split])
+    difference_normalized_mean = np.array([np.mean(arr) for arr in difference_normalized_split])  # taking the mean of all values
+    hallucination_label = np.array(
+        [np.max(arr) for arr in hallucination_label_split])  # assuming sentence is hallucinated if at least one span is hallucinated
 
     difference_normalized_mean_norm = min_max_normalization(difference_normalized_mean)
 
@@ -147,22 +147,23 @@ def test_args():
     args = argparse.Namespace()
     args.dataset_path = "./redeep_llama27b.json"
     args.output = "./redeep_llama27b_regression_results.json"
-    args.top_n = 22
-    args.top_k = 10
-    args.alpha = 0.2
-    args.m = 1
+    args.top_n_heads = 22
+    args.top_n_layers = 10
+    args.external_sim_scaling = 0.2
+    args.param_know_scaling = 1
     return args
 
 
 def main(args: argparse.Namespace):
-    # number = 32  # amount of samples. relates to layers of detect_model. No longer used, automatic methods used. Keeping for
-    # explanation.
+    # number = 32  # amount of samples. relates to layers of detect_model. No longer used, automatic methods used. Keeping for explanation.
     dc, info = construct_dataframe(args.dataset_path)  # output of token_level_detect
     auc_ext_sim_arr, pearson_ext_sim_arr, auc_param_know_arr, pearson_param_know_arr = calculate_auc_pcc(dc)
 
     auc_difference_normalized, results = calculate_auc_pcc_32_32(dc=dc, copy_heads=info["copy_heads"],
-                                                                 auc_ext_arr=auc_ext_sim_arr, auc_param_arr=auc_param_know_arr,
-                                                                 top_n_heads=args.top_n_heads, top_n_layers=args.top_n_layers,
+                                                                 auc_ext_arr=auc_ext_sim_arr,
+                                                                 auc_param_arr=auc_param_know_arr,
+                                                                 top_n_heads=args.top_n_heads,
+                                                                 top_n_layers=args.top_n_layers,
                                                                  external_sim_scaling=args.external_sim_scaling,
                                                                  param_know_scaling=args.param_know_scaling)
 
