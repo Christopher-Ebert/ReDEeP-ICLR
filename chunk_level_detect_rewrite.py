@@ -212,6 +212,7 @@ def process_responses(
         knowledge_layers: List[int],
 ) -> dict[str, dict[str, Any]]:
     dc = {}
+    dc["copy_heads"] = copy_heads
     for dataset_key, dataset_value in tqdm(dataset.items(), desc="processing ReDeEP chunk level detection."):
         torch.cuda.empty_cache()
         response_rag = dataset_value['response']
@@ -225,7 +226,7 @@ def process_responses(
         input_text = text + response_rag
 
         input_ids = tokenizer([input_text], return_tensors="pt").input_ids
-        prefix_ids = tokenizer([text], return_tensors="pt").input_ids
+        # prefix_ids = tokenizer([text], return_tensors="pt").input_ids
         # continue_ids = input_ids[0, prefix_ids.shape[-1]:]  # not used in original code base as well
 
         hallucination_spans = []
@@ -322,6 +323,19 @@ def main(args: argparse.Namespace):
     with save_path.open("w") as f:
         json.dump(processed_responses, f, ensure_ascii=False, cls=JsonEncoder, indent=1, )
     print(f"Results saved to {save_path}")
+
+
+def test_args():
+    args = argparse.Namespace()
+    args.model_name = "meta-llama/Llama-2-7b-chat-hf"
+    args.dataset_path = "./dataset/response_span_llama-2-7b-chat.json"
+    args.copy_heads_path = "./copy_heads/llama27b_copy_heads.json"
+    args.token = ""
+    args.output = "./test_output_chunk.json"
+    args.cache_dir = "./.cache_dir"
+    args.amount = 5
+    args.knowledge_layers = [0, 32]
+    return args
 
 
 if __name__ == "__main__":
