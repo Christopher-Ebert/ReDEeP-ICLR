@@ -12,28 +12,30 @@
 
 hf_token=$1
 
+mkdir -p results
+
 ./mkenv.sh
 
 # llama 2 7b
 echo "############ llama 2 7b ragtruth ############"
-detect_out=./ragtruth_llama2_7b_token_detect.json
-reg_out=/ragtruth_llama2_7b_token_reg.json
+detect_out=./results/ragtruth_llama2_7b_token_detect.json
+reg_out=./results/ragtruth_llama2_7b_token_reg.json
 
 python token_level_detect_rewrite.py -m meta-llama/Llama-2-7b-chat-hf -d ./dataset/response_span_llama-2-7b-chat.json -c ./copy_heads/llama27b_copy_heads.json -t "$hf_token" -o "$detect_out"
 python token_level_reg_rewrite.py -d "$detect_out" -nh 1 -nl 10 -a 0.2 -m 1 -o "$reg_out"
 
 # llama 2 13b
 echo "############ llama 2 13b ragtruth ############"
-detect_out=./ragtruth_llama2_13b_token_detect.json
-reg_out=/ragtruth_llama2_13b_token_reg.json
+detect_out=./results/ragtruth_llama2_13b_token_detect.json
+reg_out=./results/ragtruth_llama2_13b_token_reg.json
 
 python token_level_detect_rewrite.py -m meta-llama/Llama-2-13b-chat-hf -d ./dataset/response_span_llama-2-13b-chat.json -c ./copy_heads/llama213b_copy_heads.json -t "$hf_token" -o "$detect_out"
 python token_level_reg_rewrite.py -d "$detect_out" -nh 2 -nl 17 -a 0.6 -m 1 -o "$reg_out"
 
 # llama 3 8b
 echo "############ llama 3 8b ragtruth ############"
-detect_out=./ragtruth_llama3_8b_token_detect.json
-reg_out=/ragtruth_llama3_8b_token_reg.json
+detect_out=./results/ragtruth_llama3_8b_token_detect.json
+reg_out=./results/ragtruth_llama3_8b_token_reg.json
 
 python token_level_detect_rewrite.py -m meta-llama/Meta-Llama-3-8B-Instruct -d ./dataset/response_span_llama-2-7b-chat.json -c ./copy_heads/llama38b_copy_heads.json -t "$hf_token" -o "$detect_out"
 python token_level_reg_rewrite.py -d "$detect_out" -nh 3 -nl 30 -a 0.4 -m 1 -o "$reg_out"
