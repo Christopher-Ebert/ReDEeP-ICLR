@@ -14,8 +14,8 @@ hf_token=$1
 
 mkdir -p results
 
-./mkenv.sh
-
+pip install -r requirements.txt
+pip install tokenizers
 # llama 2 7b
 echo "############ llama 2 7b ragtruth ############"
 detect_out=./results/ragtruth_llama2_7b_chunk_detect.json

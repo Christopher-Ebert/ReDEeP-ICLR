@@ -319,7 +319,7 @@ def main(args: argparse.Namespace):
         args.knowledge_layers
     )
     # saving
-    save_path = Path(args.output)
+    save_path = Path(args.output).absolute()
     with save_path.open("w") as f:
         json.dump(processed_responses, f, ensure_ascii=False, cls=JsonEncoder, indent=1, )
     print(f"Results saved to {save_path}")
