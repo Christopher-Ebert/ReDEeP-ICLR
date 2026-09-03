@@ -14,7 +14,8 @@ hf_token=$1
 
 mkdir -p results
 
-./mkenv.sh
+pip install -r requirements.txt
+pip install tokenizers
 
 # llama 2 7b
 echo "############ llama 2 7b ragtruth ############"

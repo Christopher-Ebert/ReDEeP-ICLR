@@ -19,9 +19,12 @@ def load_data(response_path: str, source_info_path: str):
     return response, source_info_dict
 
 
-response_path = r"/mnt/internal/sata-ssd/GitHub/SteffenLuminaETC/ReDeEP/dataset/response_spans.jsonl"
-source_info_path = r"/mnt/internal/sata-ssd/GitHub/SteffenLuminaETC/ReDeEP/dataset/source_info_spans.jsonl"
-new_path = Path(r"/mnt/internal/sata-ssd/GitHub/SteffenLuminaETC/ReDeEP/dataset/")
+#response_path = r"./dataset/response_spans.jsonl"
+#source_info_path = r"./dataset/source_info_spans.jsonl"
+
+response_path = r"./dataset/response_with_llama3_8b_spans.jsonl"
+source_info_path = r"./dataset/source_info_spans.jsonl"
+new_path = Path(r"./dataset/")
 
 responses, source_info = load_data(response_path, source_info_path)
 
@@ -37,5 +40,8 @@ for i in responses:
 
 for k, v in dc.items():
     o_p = new_path / Path(f"response_span_{k}.json")
+    if o_p.exists():
+        continue
+
     with o_p.open("w") as f:
         json.dump(v, f)

@@ -197,10 +197,10 @@ def calculate_auc_pcc_32_32(dc: dict, copy_heads: list, auc_ext_arr: np.ndarray[
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='ReDeEP token level Regression. Run this after token_level_detection.')
-    parser.add_argument("-d", "--dataset_path", type=str, required=True, help=f"path to token_level_detection output")
-    parser.add_argument("-o", "--output", type=str, default="./redeep_token_level_reg.json",
-                        help="output path. Default: ./redeep_token_level_reg.json")
+    parser = argparse.ArgumentParser(description='ReDeEP chunk level Regression. Run this after chunk_level_detection.')
+    parser.add_argument("-d", "--dataset_path", type=str, required=True, help=f"path to chunk_level_detection output")
+    parser.add_argument("-o", "--output", type=str, default="./redeep_chunk_level_reg.json",
+                        help="output path. Default: ./redeep_chunk_level_reg.json")
     parser.add_argument("-nh", "--top_n_heads", type=int, default=1, help="")
     parser.add_argument("-nl", "--top_n_layers", type=int, default=10)
     parser.add_argument("-a", "--external_sim_scaling", type=float, default=0.2)

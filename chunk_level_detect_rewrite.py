@@ -279,7 +279,7 @@ def process_responses(
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='ReDeEP token level detection.')
+    parser = argparse.ArgumentParser(description='ReDeEP chunk level detection.')
     parser.add_argument("-m", '--model_name', type=str, required=True, help='huggingface model identifyer')
     parser.add_argument("-d", "--dataset_path", type=str, required=True, help=f"path to dataset")
     parser.add_argument("-c", "--copy_heads_path", type=str, required=False, default=None,
