@@ -33,8 +33,8 @@ def parse_arguments() -> argparse.Namespace:
                         help="output path. Default: ./redeep_token_level_reg.json")
     parser.add_argument("-nh", "--top_n_heads", type=int, default=1, help="")
     parser.add_argument("-nl", "--top_n_layers", type=int, default=10)
-    parser.add_argument("-a", "--external_sim_scaling", type=float, default=0.2)
-    parser.add_argument("-m", "--param_know_scaling", type=int, default=1)
+    parser.add_argument("-es", "--external_sim_scaling", type=float, default=0.2)
+    parser.add_argument("-pk", "--param_know_scaling", type=int, default=1)
 
     args = parser.parse_args()
     args.knowledge_layers = [int(i) for i in args.knowledge_layers]
@@ -492,6 +492,10 @@ def calculate_auc_pcc_32_32(dc: dict, copy_heads: list, auc_ext_arr: np.ndarray[
     return auc_difference_normalized_norm, results
 
 
+def custom_print(s: str, symbol: str = '#', amount: int = 10):
+    print(symbol * amount + ' ' + s + ' ' + symbol * amount)
+
+
 def step1(args: argparse.Namespace):
     """Main function to orchestrate the processing pipeline."""
     # setup
@@ -505,6 +509,7 @@ def step1(args: argparse.Namespace):
     model, tokenizer = load_model_and_tokenizer(args.model_name, args.cache_dir, args.token)
 
     bge_model = SentenceTransformer("BAAI/bge-base-en-v1.5", cache_folder=args.cache_dir, token=args.token).to("cuda")
+    custom_print('step 1. processing responses.')
     processed_responses = process_responses(
         dataset,
         model,
@@ -517,6 +522,7 @@ def step1(args: argparse.Namespace):
 
 
 def step2(args: argparse.Namespace, processed_responses):
+    custom_print('step 2. analysing responses.')
     dc, info = construct_dataframe(processed_responses)
     auc_ext_sim_arr, pearson_ext_sim_arr, auc_param_know_arr, pearson_param_know_arr = calculate_auc_pcc(dc)
 
@@ -537,3 +543,4 @@ if __name__ == "__main__":
     args = parse_arguments()
     processed_responses = step1(args)
     step2(args, processed_responses)
+    custom_print('done')

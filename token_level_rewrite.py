@@ -17,6 +17,7 @@ from torch.nn import functional as F
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='ReDeEP token level detection.')
@@ -34,12 +35,13 @@ def parse_arguments() -> argparse.Namespace:
                         help="output path. Default: ./redeep_token_level_reg.json")
     parser.add_argument("-nh", "--top_n_heads", type=int, default=1, help="")
     parser.add_argument("-nl", "--top_n_layers", type=int, default=10)
-    parser.add_argument("-a", "--external_sim_scaling", type=float, default=0.2)
-    parser.add_argument("-m", "--param_know_scaling", type=int, default=1)
+    parser.add_argument("-es", "--external_sim_scaling", type=float, default=0.2)
+    parser.add_argument("-pk", "--param_know_scaling", type=int, default=1)
 
     args = parser.parse_args()
     args.knowledge_layers = [int(i) for i in args.knowledge_layers]
     return args
+
 
 class JsonEncoder(json.JSONEncoder):
     """
@@ -269,7 +271,7 @@ def process_responses(
             current_hidden_state = current_hidden_state.unsqueeze(0).expand(attend_token_hidden_state.shape)
             # 计算余弦相似度 -> Calculate cosine similarity.
             cosine_similarity = F.cosine_similarity(attend_token_hidden_state.to(model.device),
-                                                    current_hidden_state.to(model.device), dim=1)
+                                                    current_hidden_state.to(model.device), dim=1).tolist()
             hallucination_label.append(is_hallucination_token(seq_i, hallucination_spans))
             external_similarity.append(cosine_similarity)
             parameter_knowledge_difference.append(
@@ -287,6 +289,7 @@ def process_responses(
 
     dc["info"] = {"copy_heads": copy_heads}
     return dc
+
 
 def construct_dataframe(processed_responses):
     info = processed_responses.pop("info")
@@ -400,8 +403,11 @@ def calculate_auc_pcc_32_32(dc: dict, copy_heads: list, auc_ext_arr: np.ndarray[
     return auc_difference_normalized_norm, results
 
 
+def custom_print(s: str, symbol: str = '#', amount: int = 10):
+    print(symbol * amount + ' ' + s + ' ' + symbol * amount)
+
+
 def step1(args: argparse.Namespace):
-    """Main function to orchestrate the processing pipeline."""
     # setup
     copy_heads, copy_heads_model = load_copy_heads(args.copy_heads_path)
     if args.model_name != copy_heads_model:
@@ -413,13 +419,15 @@ def step1(args: argparse.Namespace):
     model, tokenizer = load_model_and_tokenizer(args.model_name, args.cache_dir, args.token)
 
     # redeep
+    custom_print('step 1. processing responses.')
     processed_responses: Dict[str, Dict[str, Any]] = process_responses(dataset, model, tokenizer, copy_heads,
                                                                        args.knowledge_layers)
     return processed_responses
 
 
-def step2(args: argparse.Namespace, processed_responses):
+def step2(args: argparse.Namespace, processed_responses: Dict[str, Dict[str, Any]]):
     # number = 32  # amount of samples. relates to layers of detect_model. No longer used, automatic methods used. Keeping for explanation.
+    custom_print('step 2. analysing responses.')
     dc, info = construct_dataframe(processed_responses)  # output of token_level_detect
     auc_ext_sim_arr, pearson_ext_sim_arr, auc_param_know_arr, pearson_param_know_arr = calculate_auc_pcc(dc)
 
@@ -440,3 +448,4 @@ if __name__ == "__main__":
     args = parse_arguments()
     processed_responses = step1(args)
     step2(args, processed_responses)
+    custom_print('done')
