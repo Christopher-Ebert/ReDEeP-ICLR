@@ -37,6 +37,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("-nl", "--top_n_layers", type=int, default=10)
     parser.add_argument("-es", "--external_sim_scaling", type=float, default=0.2)
     parser.add_argument("-pk", "--param_know_scaling", type=int, default=1)
+    parser.add_argument("--max_sentence_length", type=int, default=12000, required=False)
 
     args = parser.parse_args()
     args.knowledge_layers = [int(i) for i in args.knowledge_layers]
@@ -58,7 +59,10 @@ class JsonEncoder(json.JSONEncoder):
 
 def load_data(fp, amount: int = -1, ):
     with Path(fp).open() as f:
-        data: dict = json.load(f)
+        data: dict | list = json.load(f)
+
+    if isinstance(data, list):
+        data: dict = {k: v for k, v in enumerate(data)}
 
     # handling amount
     if amount == -1:
@@ -130,13 +134,28 @@ def is_hallucination_token(token_id, hallucination_spans) -> bool:
 
 
 def calculate_hallucination_spans(
-        labels: Any,
+        labels: list | tuple | int,
         text: str,
         response_rag: str,
         tokenizer: Any,
 ) -> List[List[int]]:
     """Calculate hallucination spans in token IDs."""
     hallucination_span = []
+    if isinstance(labels, int):
+        if labels <= 0:
+            return [[0, 0]]  # not hallucinated
+        if labels >= 1:
+            start_id = 0
+            end_id = len(text + response_rag)
+            start_text = text + response_rag[:start_id]
+            end_text = text + response_rag[:end_id]
+            start_text_id = tokenizer(start_text, return_tensors="pt").input_ids
+            end_text_id = tokenizer(end_text, return_tensors="pt").input_ids
+            start_id = start_text_id.shape[-1]
+            end_id = end_text_id.shape[-1]
+            hallucination_span.append([start_id, end_id])
+            return hallucination_span
+
     for item in labels:
         start_id = item['start']
         end_id = item['end']
@@ -170,25 +189,26 @@ def process_responses(
         tokenizer: Any,
         copy_heads: Iterable[Iterable[int]],
         knowledge_layers: List[int],
+        max_sentence_length: int = 12000
 ) -> dict[str, dict[str, Any]]:
     dc = {}
     for dataset_key, dataset_value in tqdm(dataset.items(), desc="processing ReDeEP token level detection."):
         torch.cuda.empty_cache()
-        response_rag = dataset_value['response']
-        prompt = dataset_value['prompt']
-        labels: List | Tuple = dataset_value["labels"]
+        response_rag: str = dataset_value.get('response', '')
+        prompt: str = dataset_value.get('prompt', '') or dataset_value.get('correct_prompt', '')
+        labels: List | Tuple | int = dataset_value.get("labels", None) or dataset_value.get('label', None)
 
-        text = add_special_template(prompt[:12000], tokenizer)
-        input_text = text + response_rag
+        prompt = add_special_template(prompt[:max_sentence_length], tokenizer)
+        input_text = prompt + response_rag
 
         input_ids = tokenizer([input_text], return_tensors="pt").input_ids
-        prefix_ids = tokenizer([text], return_tensors="pt").input_ids
+        prefix_ids = tokenizer([prompt], return_tensors="pt").input_ids
         # continue_ids = input_ids[0, prefix_ids.shape[-1]:]  # todo 这边要改成幻觉 token 的起止位置 -> This needs to be changed to the start and end
         #  positions of the hallucination tokens.
 
         hallucination_spans = []
         if labels is not None or len(labels) != 0:
-            hallucination_spans = calculate_hallucination_spans(labels, text, response_rag, tokenizer)
+            hallucination_spans = calculate_hallucination_spans(labels, prompt, response_rag, tokenizer)
 
         with torch.no_grad():
             logits_dict, outputs = model(
@@ -421,7 +441,7 @@ def step1(args: argparse.Namespace):
     # redeep
     custom_print('step 1. processing responses.')
     processed_responses: Dict[str, Dict[str, Any]] = process_responses(dataset, model, tokenizer, copy_heads,
-                                                                       args.knowledge_layers)
+                                                                       args.knowledge_layers, max_sentence_length=args.max_sentence_length)
     return processed_responses
 
 
@@ -439,7 +459,8 @@ def step2(args: argparse.Namespace, processed_responses: Dict[str, Dict[str, Any
                                                                  external_sim_scaling=args.external_sim_scaling,
                                                                  param_know_scaling=args.param_know_scaling)
 
-    result_dict = {"auc": auc_difference_normalized[0], "pcc": auc_difference_normalized[1], **results}
+    result_dict = {"auc": auc_difference_normalized[0], "pcc": auc_difference_normalized[1], **args.__dict__, **results}
+
     with Path(args.output).open("w") as f:
         json.dump(result_dict, f, ensure_ascii=False)
 
