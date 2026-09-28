@@ -189,14 +189,25 @@ def process_responses(
         tokenizer: Any,
         copy_heads: Iterable[Iterable[int]],
         knowledge_layers: List[int],
-        max_sentence_length: int = 12000
+        max_sentence_length: int = 12000,
 ) -> dict[str, dict[str, Any]]:
     dc = {}
     for dataset_key, dataset_value in tqdm(dataset.items(), desc="processing ReDeEP token level detection."):
         torch.cuda.empty_cache()
         response_rag: str = dataset_value.get('response', '')
-        prompt: str = dataset_value.get('prompt', '') or dataset_value.get('correct_prompt', '')
+        prompt = dataset_value.get('prompt', '') or dataset_value.get('correct_prompt',
+                                                                      '')  # should be str, but because of bad dataset design could be
+        # dict list[dict]
         labels: List | Tuple | int = dataset_value.get("labels", None) or dataset_value.get('label', None)
+
+        # handling edge cases
+        if isinstance(prompt, dict):
+            prompt = prompt['content']
+
+        if isinstance(prompt, list):
+            prompt = prompt[0]
+            if isinstance(prompt, dict):
+                prompt = prompt['content']
 
         prompt = add_special_template(prompt[:max_sentence_length], tokenizer)
         input_text = prompt + response_rag
@@ -460,8 +471,8 @@ def step2(args: argparse.Namespace, processed_responses: Dict[str, Dict[str, Any
                                                                  param_know_scaling=args.param_know_scaling)
 
     result_dict = {"auc": auc_difference_normalized[0], "pcc": auc_difference_normalized[1], **args.__dict__, **results}
-
-    with Path(args.output).open("w") as f:
+    fp: Path = Path(args.output)
+    with fp.open("w") as f:
         json.dump(result_dict, f, ensure_ascii=False)
 
 
