@@ -27,7 +27,7 @@ export HF_TOKEN=$token
 pip install datasets numpy==2.5.1 accelerate sentence-transformers tokenizers tqdm
 pip install --upgrade ./transformers-4.42.0.dev0-py3-none-any.whl
 hf auth login --token "\$HF_TOKEN"
-python "$command"
+python $command
 EOF
 }
 
