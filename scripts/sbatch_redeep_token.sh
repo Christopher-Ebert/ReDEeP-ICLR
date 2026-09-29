@@ -45,6 +45,11 @@ DATASETS=(
 './dataset/response_span_mistral-7B-instruct.json'
 './dataset/source_info_spans.jsonl'
 './dataset/response_span_gpt-3.5-turbo-0613.json'
+'./data/hdm_bench_mr.json'
+'./data/hdm_bench_synthetic.json'
+'./data/llama2-7b.json'
+'./data/llama2-13b.json'
+'./data/mistral-7b.json'
 './data/ragbench_covidqa_test.json'
 './data/ragbench_hotpotqa_test.json'
 './data/ragbench_msmarco_test.json'
@@ -61,6 +66,12 @@ DATASETS=(
 './data/ragtruth-llama-2-7b-chat-train.json'
 './data/ragtruth-mistral-7B-instruct-test.json'
 './data/ragtruth-mistral-7B-instruct-train.json'
+'./data/test_llama2-7b.json'
+'./data/test_llama2-13b.json'
+'./data/test_mistral-7b.json'
+'./data/val_llama2-7b.json'
+'./data/val_llama2-13b.json'
+'./data/val_mistral-7b.json'
 )
 
 DATASET_IDENTS=(
@@ -76,6 +87,11 @@ DATASET_IDENTS=(
 'response_span_mistral-7B-instruct'
 'source_info_spans'
 'response_span_gpt-3.5-turbo-0613'
+'hdm_bench_mr'
+'hdm_bench_synthetic'
+'llama2-7b'
+'llama2-13b'
+'mistral-7b'
 'ragbench_covidqa_test'
 'ragbench_hotpotqa_test'
 'ragbench_msmarco_test'
@@ -92,6 +108,12 @@ DATASET_IDENTS=(
 'ragtruth-llama-2-7b-chat-train'
 'ragtruth-mistral-7B-instruct-test'
 'ragtruth-mistral-7B-instruct-train'
+'test_llama2-7b'
+'test_llama2-13b'
+'test_mistral-7b'
+'val_llama2-7b'
+'val_llama2-13b'
+'val_mistral-7b'
 )
 
 MODELS=(
